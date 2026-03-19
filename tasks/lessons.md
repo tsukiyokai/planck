@@ -1,12 +1,12 @@
-# pgccl Lessons Learned
+# Planck Lessons Learned
 
 ## 2026-03-19: Brainstorming Session
 
 ### Lesson 1: 独立执行器 vs ACL Graph协同
 
-最初设计pgccl为独立于ACL Graph的执行系统(Rust编译plan -> C++ executor执行)。深入调研后发现HCCL通信算子已经可以在ACL Graph内部执行。独立执行器会打断graph,反而降低性能。
+最初设计Planck为独立于ACL Graph的执行系统(Rust编译plan -> C++ executor执行)。深入调研后发现HCCL通信算子已经可以在ACL Graph内部执行。独立执行器会打断graph,反而降低性能。
 
-修正: pgccl的主路径改为ACL Graph的增强层(torchair graph pass + custom ops),standalone executor降级为ACL Graph不兼容场景的备选。
+修正: Planck的主路径改为ACL Graph的增强层(torchair graph pass + custom ops),standalone executor降级为ACL Graph不兼容场景的备选。
 
 教训: 在设计新系统前,必须深入理解目标平台的现有执行模型。不要假设,要验证。
 
@@ -29,7 +29,7 @@
 
 ### Lesson 4: Rust性能的真正杠杆
 
-高性能Rust编程在pgccl中的价值不是"让通信更快"(通信在C++/硬件层),而是解锁三个质变能力:
+高性能Rust编程在Planck中的价值不是"让通信更快"(通信在C++/硬件层),而是解锁三个质变能力:
 1. 更深的搜索 -> 更优的plan -> 间接加速每步
 2. 微秒级实例化 -> per-request JIT plan
 3. 毫秒级重编译 -> 在线自适应

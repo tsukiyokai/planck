@@ -1,4 +1,4 @@
-# pgccl Task List
+# Planck Task List
 
 ## Brainstorming Phase (2026-03-19)
 

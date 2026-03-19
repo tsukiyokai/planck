@@ -1,4 +1,4 @@
-# pgccl Design Document
+# Planck Design Document
 
 > PanGu Collective Communication Library
 > Date: 2026-03-19
@@ -8,7 +8,7 @@
 
 ## 1. Project Vision
 
-pgccl is a collective communication library for Ascend NPUs, specialized for PanGu large models. It targets both training and inference scenarios.
+Planck is a collective communication library for Ascend NPUs, specialized for PanGu large models. It targets both training and inference scenarios.
 
 One-line positioning: Ahead-of-time plan compilation for cross-operation global optimization, exploiting Ascend's physically separated engines (MTE/AIV/Cube) for true communication/compression/computation parallelism.
 
@@ -46,7 +46,7 @@ The three layers multiply, not add.
 
 ### 1.3 Dual Scenario Coverage
 
-| Scenario  | Communication Profile           | pgccl Strategy                              |
+| Scenario  | Communication Profile           | Planck Strategy                              |
 |:----------|:--------------------------------|:--------------------------------------------|
 | Training  | Large messages, fixed pattern   | Static plan, compile once run millions      |
 | Inference | Small messages (decode), dynamic batch | Parameterized plan template, O(1) instantiation |
@@ -57,20 +57,20 @@ The three layers multiply, not add.
 
 ### 2.1 Architecture: Independent Library with Dual Delivery Channels
 
-pgccl is an independent collective communication library, not a plugin for any specific framework.
+Planck is an independent collective communication library, not a plugin for any specific framework.
 Two equally important delivery channels serve different integration scenarios.
 
-Key insight: HCCL communication ops CAN be captured inside ACL Graph. pgccl should exploit
+Key insight: HCCL communication ops CAN be captured inside ACL Graph. Planck should exploit
 this for seamless integration, while maintaining full standalone execution capability.
 
-Strategic positioning: pgccl retains the possibility of fully replacing HCCL. The standalone
+Strategic positioning: Planck retains the possibility of fully replacing HCCL. The standalone
 executor is the core (not a fallback), ACL Graph integration is an optimization channel.
 
 ```
-                         pgccl Architecture
+                         Planck Architecture
 
  +---------------------------------------------------------------+
- |                    pgccl Plan Compiler [Rust]                  |
+ |                    Planck Plan Compiler [Rust]                  |
  |  (core: topo analysis / algo select / schedule / buffer plan)  |
  |                                                                |
  |  Input: CommGraph                                              |
@@ -86,7 +86,7 @@ executor is the core (not a fallback), ACL Graph integration is an optimization 
  |  | (full execution engine)   |   | (torchair integration) |   |
  |  |                           |   |                        |   |
  |  | binary plan -> execute    |   | pattern match -> replace|   |
- |  | (zero decision, fast/slow)|   | with pgccl custom ops    |   |
+ |  | (zero decision, fast/slow)|   | with Planck custom ops    |   |
  |  +------------+--------------+   +------------+-----------+   |
  |               |                                |               |
  |  +------------v-------------------------------------------+   |
@@ -104,17 +104,17 @@ executor is the core (not a fallback), ACL Graph integration is an optimization 
 
 ### 2.2 Strategic Positioning: Independent Library
 
-pgccl is designed as a self-contained communication library like NCCL, not a framework plugin.
+Planck is designed as a self-contained communication library like NCCL, not a framework plugin.
 
 NCCL's success path: independent library first, CUDA Graph integration added later as optimization.
-pgccl follows the same path: standalone executor is the core, ACL Graph integration is an optimization channel.
+Planck follows the same path: standalone executor is the core, ACL Graph integration is an optimization channel.
 
 Both channels share the same Plan Compiler, Transport Layer, and Custom Ops. The difference
 is only in how the compiled plan is delivered and executed:
-- Channel A: pgccl controls execution directly (full flexibility, works everywhere)
-- Channel B: ACL Graph controls execution, pgccl provides optimized ops (zero graph break, best for inference)
+- Channel A: Planck controls execution directly (full flexibility, works everywhere)
+- Channel B: ACL Graph controls execution, Planck provides optimized ops (zero graph break, best for inference)
 
-This dual-channel design means pgccl can:
+This dual-channel design means Planck can:
 - Work with MindSpore, PyTorch, JAX, or any other framework
 - Run on hardware where ACL Graph is not available (older Ascend versions)
 - Accumulate enough depth to eventually fully replace HCCL
@@ -139,16 +139,16 @@ Execute time (Custom Ops in ACL Graph):
 ### 2.4 Module Structure
 
 ```
-pgccl/
+Planck/
 +-- crates/                          # Rust workspace
-|   +-- pgccl-core/                  # Plan Compiler
+|   +-- planck-core/                  # Plan Compiler
 |   |   +-- src/topo.rs              # Topology graph (petgraph or CSR)
 |   |   +-- src/cost.rs              # Alpha-beta-gamma cost model
 |   |   +-- src/algo.rs              # Algorithm database
 |   |   +-- src/sched.rs             # Schedule optimizer
 |   |   +-- src/plan.rs              # Plan IR + serialization
 |   |   +-- src/template.rs          # Parameterized templates
-|   +-- pgccl-python/                # PyO3 bindings
+|   +-- planck-python/                # PyO3 bindings
 |       +-- src/lib.rs               # PlanCache exposed to Python
 |
 +-- csrc/                            # C++ Custom Ops
@@ -169,11 +169,11 @@ pgccl/
 |   |   +-- hccs.cc
 |   |   +-- roce.cc
 |   +-- compat/                      # torch compatibility
-|   |   +-- process_group_pgccl.cc
+|   |   +-- process_group_planck.cc
 |   +-- torch_binding.cpp            # TORCH_LIBRARY registration
 |   +-- CMakeLists.txt
 |
-+-- python/pgccl/
++-- python/Planck/
 |   +-- __init__.py
 |   +-- plan_cache.py                # Rust PlanCache Python wrapper
 |   +-- graph_pass.py                # torchair pattern replacement
@@ -308,7 +308,7 @@ Slow Path (exception only)
 
 ### 4.2 ACL Runtime Constraints
 
-| Constraint            | Value                        | Impact on pgccl                  |
+| Constraint            | Value                        | Impact on Planck                  |
 |:----------------------|:-----------------------------|:---------------------------------|
 | Stream limit          | ~2048/device, 248 reserved   | Must pool, cannot create freely  |
 | Huge page threshold   | >1MB uses huge pages         | Pre-allocate buffers >= 1MB      |
@@ -317,10 +317,10 @@ Slow Path (exception only)
 
 ### 4.3 Coexistence with ACL Graph
 
-pgccl Plan Executor and ACL Graph are complementary, not competing:
+Planck Plan Executor and ACL Graph are complementary, not competing:
 - Compute kernels: ACL Graph (zero launch overhead)
-- Communication: pgccl custom ops inside ACL Graph, or standalone executor for incompatible ops
-- Coordination: stream events between ACL Graph nodes and pgccl ops
+- Communication: Planck custom ops inside ACL Graph, or standalone executor for incompatible ops
+- Coordination: stream events between ACL Graph nodes and Planck ops
 
 ---
 
@@ -328,27 +328,27 @@ pgccl Plan Executor and ACL Graph are complementary, not competing:
 
 ### 5.1 Communication API Boundary
 
-| Level        | NVIDIA              | Ascend              | pgccl v0.1? |
+| Level        | NVIDIA              | Ascend              | Planck v0.1? |
 |:-------------|:--------------------|:---------------------|:------------|
 | Kernel-level | NVSHMEM (public)    | AIV-Direct (not public) | No       |
 | P2P          | ncclSend/Recv       | HcclSend/Recv       | Yes          |
 | Collective   | ncclAllReduce...    | HcclAllReduce...    | Yes          |
 
-pgccl v0.1 builds on HCCL P2P API. Kernel-level communication (AIV-Direct) is v0.2+ with Huawei collaboration.
+Planck v0.1 builds on HCCL P2P API. Kernel-level communication (AIV-Direct) is v0.2+ with Huawei collaboration.
 
 ### 5.2 Three Categories of Custom Ops
 
 Category 1 - Scheduling Optimization (build better collectives from HCCL P2P):
-- pgccl_pipelined_allreduce: cross-op pipeline of two AllReduces
-- pgccl_kv_pipeline_transfer: layer-level pipeline KV cache transfer
+- planck_pipelined_allreduce: cross-op pipeline of two AllReduces
+- planck_kv_pipeline_transfer: layer-level pipeline KV cache transfer
 
 Category 2 - Fusion (communication + computation merged):
-- pgccl_rs_add_rmsnorm_ag: ReduceScatter -> Add+RMSNorm -> AllGather (MC2-style)
-- pgccl_quantized_allreduce: quantized compressed AllReduce
+- planck_rs_add_rmsnorm_ag: ReduceScatter -> Add+RMSNorm -> AllGather (MC2-style)
+- planck_quantized_allreduce: quantized compressed AllReduce
 
 Category 3 - Specialization (PanGu-specific patterns):
-- pgccl_moe_dispatch: MoE expert dispatch (DeepEP-inspired)
-- pgccl_partial_allreduce: partial synchrony TP (CAAT-Net-inspired)
+- planck_moe_dispatch: MoE expert dispatch (DeepEP-inspired)
+- planck_partial_allreduce: partial synchrony TP (CAAT-Net-inspired)
 
 ### 5.3 Registration Pattern
 
@@ -360,10 +360,10 @@ Category 3 - Specialization (PanGu-specific patterns):
 
 ### 5.4 Graph Optimization Pass
 
-pgccl registers pattern replacements via torchair.register_replacement():
-- Two adjacent AllReduces -> pgccl.pipelined_allreduce
-- Large AllReduce -> pgccl.quantized_allreduce
-- MatMul+AllReduce+Add+RMSNorm -> pgccl.rs_add_rmsnorm_ag
+Planck registers pattern replacements via torchair.register_replacement():
+- Two adjacent AllReduces -> planck.pipelined_allreduce
+- Large AllReduce -> planck.quantized_allreduce
+- MatMul+AllReduce+Add+RMSNorm -> planck.rs_add_rmsnorm_ag
 
 Plan Compiler decisions are passed to custom ops via PlanCache (Rust -> PyO3 -> Python).
 
@@ -515,12 +515,12 @@ FFI boundary is narrow: PlanCache (Rust -> PyO3 -> Python -> C++ custom ops read
 
 ### 9.2 Standalone Executor C ABI (Fallback Path)
 
-Only 3 functions: pgccl_compile, pgccl_execute, pgccl_instantiate.
+Only 3 functions: planck_compile, planck_execute, planck_instantiate.
 Called infrequently (compile once, execute per-step but just passing serialized data).
 
 ### 9.3 torch Integration: Dual Mode
 
-- Graph Mode (primary): pgccl graph optimization pass -> custom ops inside ACL Graph
+- Graph Mode (primary): Planck graph optimization pass -> custom ops inside ACL Graph
 - Compat Mode (fallback): ProcessGroupPGCCL implementing c10d::ProcessGroup
 
 ### 9.4 One-Sided Primitives (MSCCL++ lesson)
@@ -530,7 +530,7 @@ Put/Signal/Wait instead of Send/Recv. One-sided model unlocks all-pairs algorith
 ### 9.5 Ascend Hardware Exploitation
 
 MTE + AIV + Cube are physically separated engines (not shared like GPU SMs).
-pgccl exploits this with pipelined inline processing:
+Planck exploits this with pipelined inline processing:
 
 ```
 MTE: load data to on-chip buffer (double-buffered)
@@ -576,7 +576,7 @@ Rust performance matters for three capability unlocks:
 ### 11.1 Deliverables
 
 ```
-pgccl v0.1 scope
+Planck v0.1 scope
 +-- Plan Compiler [Rust]
 |   +-- 8-card HCCS topology (hardcoded)
 |   +-- AllReduce Ring algorithm (single algorithm)
@@ -585,12 +585,12 @@ pgccl v0.1 scope
 |
 +-- Primary Path: torchair graph pass
 |   +-- Recognize AllReduce pattern
-|   +-- Replace with pgccl custom op
+|   +-- Replace with Planck custom op
 |   +-- ACL Graph compatibility verification
 |
-+-- pgccl Custom Ops [C++ AscendC]
-|   +-- pgccl_pipelined_allreduce (2x AllReduce pipeline)
-|   +-- pgccl_quantized_allreduce (INT8 compressed)
++-- Planck Custom Ops [C++ AscendC]
+|   +-- planck_pipelined_allreduce (2x AllReduce pipeline)
+|   +-- planck_quantized_allreduce (INT8 compressed)
 |   +-- Register as torch ops, graph-capturable
 |
 +-- Fallback: Standalone Executor
@@ -626,9 +626,9 @@ v0.3: Large scale 64+ machines (HCCS + RoCE + UB), schedule synthesis
 
 ---
 
-## 12. NCCL/HCCL Weaknesses (Opportunities for pgccl)
+## 12. NCCL/HCCL Weaknesses (Opportunities for Planck)
 
-| NCCL/HCCL Weakness              | pgccl Approach                              |
+| NCCL/HCCL Weakness              | Planck Approach                              |
 |:---------------------------------|:--------------------------------------------|
 | Per-op algorithm selection       | AOT plan compilation, zero runtime decision  |
 | SM resource contention (GPU)     | MTE/AIV/Cube physical separation (Ascend)    |
@@ -642,7 +642,7 @@ v0.3: Large scale 64+ machines (HCCS + RoCE + UB), schedule synthesis
 
 ## 13. ACL Runtime Constraints
 
-| Constraint                | Value                           | pgccl Design Impact                |
+| Constraint                | Value                           | Planck Design Impact                |
 |:--------------------------|:--------------------------------|:------------------------------------|
 | Stream limit              | ~2048/device, 248 reserved      | Stream pool, coordinate with HCCL   |
 | Huge page threshold       | >1MB                            | Pre-allocate buffers >= 1MB         |
