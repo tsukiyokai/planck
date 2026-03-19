@@ -55,58 +55,70 @@ The three layers multiply, not add.
 
 ## 2. System Architecture
 
-### 2.1 Revised Architecture: ACL Graph Enhancement Layer
+### 2.1 Architecture: Independent Library with Dual Delivery Channels
 
-Key insight from deep research: HCCL communication ops CAN be captured inside ACL Graph. If pgccl builds an executor separate from ACL Graph, it actually breaks the graph and adds overhead. pgccl should enhance ACL Graph, not compete with it.
+pgccl is an independent collective communication library, not a plugin for any specific framework.
+Two equally important delivery channels serve different integration scenarios.
+
+Key insight: HCCL communication ops CAN be captured inside ACL Graph. pgccl should exploit
+this for seamless integration, while maintaining full standalone execution capability.
+
+Strategic positioning: pgccl retains the possibility of fully replacing HCCL. The standalone
+executor is the core (not a fallback), ACL Graph integration is an optimization channel.
 
 ```
-                     pgccl Architecture (revised)
+                         pgccl Architecture
 
  +---------------------------------------------------------------+
  |                    pgccl Plan Compiler [Rust]                  |
- |  (core unchanged: topo analysis/algo select/schedule/buffer)   |
+ |  (core: topo analysis / algo select / schedule / buffer plan)  |
  |                                                                |
  |  Input: CommGraph                                              |
- |  Output: optimization decisions + op parameters                |
+ |  Output: ExecutionPlan + optimization decisions                |
  +---------------+-----------------------------------------------+
  |               |                                                |
- |    Primary Path                    Fallback Path               |
- |    (inference/graph mode)          (training eager/incompatible)|
+ |    Channel A (Direct)              Channel B (ACL Graph)       |
+ |    (standalone, framework-agnostic) (torchair/graph mode)      |
+ |    equally important               equally important           |
  |               |                                                |
  |  +------------v--------------+   +------------------------+   |
- |  | Graph Optimization Pass   |   | Standalone Executor    |   |
- |  | (torchair integration)    |   | (original C++ Executor)|   |
+ |  | Standalone Executor [C++] |   | Graph Optimization Pass|   |
+ |  | (full execution engine)   |   | (torchair integration) |   |
  |  |                           |   |                        |   |
- |  | pattern match -> replace  |   | binary plan -> execute |   |
- |  | with pgccl custom ops     |   | (zero decision)        |   |
+ |  | binary plan -> execute    |   | pattern match -> replace|   |
+ |  | (zero decision, fast/slow)|   | with pgccl custom ops    |   |
  |  +------------+--------------+   +------------+-----------+   |
  |               |                                |               |
- |  +------------v--------------+   +------------v-----------+   |
- |  | pgccl Custom Ops [C++]    |   | Transport Layer        |   |
- |  | (AscendC kernels)         |   | HCCS/RoCE/UB           |   |
- |  | captured by ACL Graph     |   |                        |   |
- |  +------------+--------------+   +------------------------+   |
+ |  +------------v-------------------------------------------+   |
+ |  | Transport Layer [C++]                                  |   |
+ |  | HCCS provider | RoCE provider | UB provider | SHM      |   |
+ |  +------------------------------------------------------------+
  |               |                                                |
- |  +------------v----------------------------------------------+ |
- |  | ACL Graph (compute + pgccl comm ops coexist, no break)    | |
- |  | On replay: compute and communication in same graph        | |
- |  +-----------------------------------------------------------+ |
+ |  Channel A delivers:              Channel B delivers:          |
+ |  - ProcessGroup backend           - torchair pattern replace   |
+ |  - Python API (PyO3)              - custom ops in ACL Graph    |
+ |  - C API (standalone)             - graph-compatible execution |
+ |  - framework-agnostic             - seamless Ascend integration|
  +---------------------------------------------------------------+
 ```
 
-### 2.2 Why Not a Separate Executor (Original Design)?
+### 2.2 Strategic Positioning: Independent Library
 
-Original assumption (wrong): ACL Graph handles compute, pgccl handles comm, linked by stream events.
+pgccl is designed as a self-contained communication library like NCCL, not a framework plugin.
 
-Reality: HCCL ops already work inside ACL Graph. The forward pass runs entirely in ACL Graph. Inserting "exit graph -> pgccl executor -> re-enter graph" adds overhead.
+NCCL's success path: independent library first, CUDA Graph integration added later as optimization.
+pgccl follows the same path: standalone executor is the core, ACL Graph integration is an optimization channel.
 
-The revised architecture keeps pgccl's Plan Compiler (the "brain") but changes the "hands" from a standalone executor to ACL Graph-compatible custom ops.
+Both channels share the same Plan Compiler, Transport Layer, and Custom Ops. The difference
+is only in how the compiled plan is delivered and executed:
+- Channel A: pgccl controls execution directly (full flexibility, works everywhere)
+- Channel B: ACL Graph controls execution, pgccl provides optimized ops (zero graph break, best for inference)
 
-The standalone executor is preserved as a fallback for ACL Graph-incompatible scenarios:
-- AllToAll (contains D2H, breaks graph capture)
-- Dynamic expert routing (shape changes every step)
-- Training eager mode
-- Cross-node KV cache transfer
+This dual-channel design means pgccl can:
+- Work with MindSpore, PyTorch, JAX, or any other framework
+- Run on hardware where ACL Graph is not available (older Ascend versions)
+- Accumulate enough depth to eventually fully replace HCCL
+- Use ACL Graph integration as a "performance bonus", not a survival dependency
 
 ### 2.3 Compile-Execute Separation (Core Idea Unchanged)
 
