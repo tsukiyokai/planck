@@ -1,0 +1,37 @@
+# pgccl
+
+PanGu Collective Communication Library -- Ascend NPU上为PanGu大模型全栈特化的集合通信库。
+
+## Status
+
+Design phase complete. See `docs/plans/2026-03-19-pgccl-design.md`.
+
+## Architecture
+
+```
+Rust Plan Compiler (topo/algo/schedule/buffer optimization)
+        |
+   +----+----+
+   |         |
+   v         v
+torchair    Standalone
+graph pass  Executor
+   |         |
+   v         v
+ACL Graph   Fallback
+(primary)   (AllToAll/eager)
+```
+
+## Key Ideas
+
+- AOT plan compilation: compile entire communication graph, zero runtime decisions
+- ACL Graph integration: custom ops captured inside ACL Graph, no graph break
+- Ascend hardware exploitation: MTE+AIV+Cube physical separation for true parallelism
+- 39 innovation sources: MSCCL++/ACCL+/DeepEP/FlashMoE/ResCCL and more
+
+## Tech Stack
+
+- Rust: Plan Compiler (petgraph, PyO3, rkyv)
+- C++20: Custom Ops, AscendC kernels, Standalone Executor
+- Python: torchair graph pass, PyO3 bindings
+- Build: maturin + corrosion (cargo + cmake)
