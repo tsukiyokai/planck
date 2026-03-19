@@ -14,17 +14,19 @@ nodes:
   # ---- 上下文采集(并行) ----
   read_design:
     role: context
+    max_runs: 1
     prompt: |
       精读 docs/plans/2026-03-19-planck-design.md。
-      提炼: 三层竞争优势、系统架构(Rust Plan Compiler + C++ Custom Ops + 双渠道交付)、
+      只读不写代码。提炼: 三层竞争优势、系统架构(Rust Plan Compiler + C++ Custom Ops + 双渠道交付)、
       Plan IR三层结构(CommGraph -> LogicalPlan -> ExecutionPlan)、
       9条原语指令(Put/Signal/Wait + 融合变体)、6个编译优化pass、v0.1 scope。
 
   read_plan:
     role: context
+    max_runs: 1
     prompt: |
       精读 docs/plans/2026-03-19-planck-v01-implementation.md。
-      提炼: 7个chunk、文件结构、依赖关系图，以及每个task的:
+      只读不写代码。提炼: 7个chunk、文件结构、依赖关系图，以及每个task的:
       关键类型/结构体、测试规格、实现要求。
       聚焦Chunks 1-5 (Phase A, Rust + Python)。
 
