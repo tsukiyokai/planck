@@ -1,12 +1,104 @@
-# Planck v0.1 Implementation -- Distilled Execution Plan
-
-> 精读 `docs/plans/2026-03-19-planck-v01-implementation.md` 后的结构化提炼。
-> 聚焦 Chunks 1-5 (Phase A, Rust + Python)。
+# Planck v0.1 -- Distilled Notes
 
 ## Status
 
-Phase A complete. 29/29 Rust tests, 4/4 Python tests, 0 warnings.
+Phase A code complete. 29/29 Rust tests, 4/4 Python tests, 0 warnings.
 Benchmark: compile ~1.36us (红线 <1ms), instantiate ~73ns (红线 <1us).
+
+---
+
+## Design Document Distillation (2026-03-20)
+
+> 精读 `docs/plans/2026-03-19-planck-design.md` 后的核心要素提炼。
+
+### 1. 三层竞争优势 (相乘关系)
+
+```
+L3: Pattern Specialization  -- PanGu通信pattern先验 -> skip/prefetch/partial-reduce
+L2: Plan Compilation         -- AOT全图编译 -> cross-op buffer reuse / schedule reorder
+L1: Hardware Exploitation    -- MTE+AIV+Cube物理隔离 -> 通信/压缩/计算零竞争
+```
+
+竞品对比:
+- L1: GPU的Comet/FLUX/DeepEP争抢同一SM池; Ascend引擎物理隔离无竞争
+- L2: NCCL/HCCL逐op决策无跨op视图; Planck编译整个CommGraph
+- L3: 通用库只见孤立API调用; Planck知道PanGu全部通信模式
+
+### 2. 系统架构: Compile-Execute分离 + 双渠道交付
+
+```
+Rust Plan Compiler (brain)     C++ Custom Ops + Executor (hands)
+  topo/cost/algo/sched           ACL Runtime/kernel/HCCL P2P
+           |                                |
+           +---- PlanCache (PyO3 FFI) ------+
+           |                                |
+    Channel A: Standalone          Channel B: ACL Graph
+    (core, framework-agnostic)     (torchair, zero graph break)
+```
+
+关键决策:
+- Standalone是核心不是fallback (NCCL路径: 先独立库后CUDA Graph)
+- 两渠道共享Compiler/Transport/CustomOps,只有交付方式不同
+- Rust/C++分界: Rust决策(编译期), C++执行(运行期), FFI仅PlanCache
+- 构建: maturin -> cargo(Rust) + corrosion(cmake/C++) -> unified wheel
+
+### 3. Plan IR三层结构
+
+```
+CommGraph (L1)        LogicalPlan (L2)           ExecutionPlan (L3)
+"做什么"               "怎么分解"                  "怎么执行"
+(语义层,硬件无关)      (算法已选,buffer已规划)     (stream分配,零运行时决策)
+```
+
+序列化: C packed structs (header 32B + BufEntry[] 12B each + OpEntry[] 16B each)
+选packed struct而非FlatBuffers: plan结构简单,reinterpret_cast直读,无需IDL
+
+### 4. 9条原语指令 (MSCCL++ one-sided model)
+
+基础(5): Put / Signal / Wait / LocalCopy / LocalReduce
+融合(3): PutWithSignal / WaitReduceCopy / WaitReducePut (编译器Pass 5自动生成)
+同步(1): Noop
+
+选one-sided(put/signal/wait)而非two-sided(send/recv): 解锁all-pairs算法,减少同步
+MSCCL++报告小消息AllReduce 3.1x加速
+
+### 5. 6个编译优化Pass
+
+```
+Pass 1: Algorithm Selection    AllReduce -> Ring(RS+AG)              决策层
+Pass 2: Chunking & Pipeline    256MB/4chunks = 64MB, 4-stage        决策层
+Pass 3: Buffer Planning        静态lifetime, cross-op buffer复用    资源层
+Pass 4: Dependency Refinement  op-level -> chunk-level deps         资源层
+Pass 5: Fusion                 Wait+Reduce+Put -> WaitReducePut     执行层
+Pass 6: Inline Transform       插入Quantize/Dequantize, MTE+AIV    执行层(Ascend专属)
+```
+
+Pass 6特殊: 利用MTE+AIV物理隔离,pipeline填满后transform延迟完全隐藏
+
+### 6. v0.1 Scope
+
+包含: 8卡HCCS | AllReduce Ring | buffer+schedule opt | plan template |
+      torchair pass | pipelined/quantized AllReduce | KV pipeline | 3组benchmark
+不含: MC2 | 多机RoCE | 通用拓扑发现 | 多算法选择 | MoE
+
+成功标准:
+- 2x AllReduce pipeline < HCCL 2x独立AllReduce
+- quantized AllReduce: 同busBW, 50%数据量
+- KV pipeline: first-token-to-decode < naive sequential
+- 所有custom ops可被ACL Graph capture
+
+### 补充: 关键Trade-off
+
+- KV cache pipeline用standalone executor: AllToAll的D2H会break ACL Graph capture
+- v0.1不做通用拓扑/多算法: specialize-first,先让PanGu最快
+- Rust性能价值不在通信热路径,在3个杠杆: 更深搜索/us级实例化/ms级重编译
+
+---
+
+## Implementation Distillation
+
+> 精读 `docs/plans/2026-03-19-planck-v01-implementation.md` 后的结构化提炼。
+> 聚焦 Chunks 1-5 (Phase A, Rust + Python)。
 
 ---
 
