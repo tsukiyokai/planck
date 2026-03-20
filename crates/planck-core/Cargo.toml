@@ -1,0 +1,11 @@
+[package]
+name = "planck-core"
+version.workspace = true
+edition.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "compile_bench"
+harness = false

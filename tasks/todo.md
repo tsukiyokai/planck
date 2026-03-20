@@ -21,15 +21,22 @@
   - [x] ACL Graph协同模式
   - [x] AscendC自定义算子开发
 - [x] 撰写设计文档
-- [ ] 调用writing-plans创建实施计划
+- [x] 调用writing-plans创建实施计划
+  - Plan: `docs/plans/2026-03-19-planck-v01-implementation.md`
 
-## Implementation Phase (pending)
+## Implementation Phase
 
-- [ ] 初始化项目骨架(Cargo workspace + CMake)
-- [ ] Rust Plan Compiler: topo/cost/algo/sched/plan
-- [ ] C++ Custom Ops: pipelined_allreduce, quantized_allreduce
-- [ ] AscendC kernels: quantize_per_group, reduce_add
-- [ ] torchair graph optimization pass
-- [ ] Standalone executor (fallback)
-- [ ] Benchmarks vs HCCL
-- [ ] ACL Graph capture兼容性验证
+See full plan: `docs/plans/2026-03-19-planck-v01-implementation.md`
+
+### Phase A: Rust + Python (macOS, no hardware dependency)
+
+- [x] Chunk 1: Project Skeleton (Cargo workspace + maturin)
+- [x] Chunk 2: Plan IR Types + Topology + Cost Model
+- [x] Chunk 3: Ring Algorithm + Pipeline Scheduler + Fusion
+- [x] Chunk 4: Serialization + Templates + E2E Simulation Test
+- [x] Chunk 5: PyO3 Bindings + Python PlanCache
+
+### Phase B: C++ Execution Layer (requires Ascend NPU)
+
+- [ ] Chunk 6: C++ Headers + Mock Transport + Executor + Custom Op Stubs
+- [ ] Chunk 7: torchair Graph Pass + Benchmarks vs HCCL

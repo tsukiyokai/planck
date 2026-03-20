@@ -1,0 +1,17 @@
+# build artifacts
+/target/
+*.pyc
+__pycache__/
+*.egg-info/
+*.so
+
+# dage workflow runs
+.dage/
+
+# ccx logs
+.ccx/
+ccx*.log
+
+# IDE
+.idea/
+.vscode/

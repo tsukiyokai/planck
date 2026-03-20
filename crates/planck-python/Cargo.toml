@@ -1,0 +1,12 @@
+[package]
+name = "planck-python"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "_planck"
+crate-type = ["cdylib"]
+
+[dependencies]
+planck-core = { path = "../planck-core" }
+pyo3 = { version = "0.22", features = ["extension-module"] }

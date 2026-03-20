@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5"]
+build-backend = "maturin"
+
+[project]
+name = "planck"
+requires-python = ">=3.8"
+dynamic = ["version"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "planck._planck"
+manifest-path = "crates/planck-python/Cargo.toml"
+python-source = "python"

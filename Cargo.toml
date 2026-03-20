@@ -1,0 +1,13 @@
+[workspace]
+members         = ["crates/planck-core", "crates/planck-python"]
+default-members = ["crates/planck-core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
