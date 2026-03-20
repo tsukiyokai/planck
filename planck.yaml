@@ -47,8 +47,9 @@ nodes:
   # ---- 项目骨架 ----
   scaffold:
     deps: [read_design, read_plan, scan_repo]
+    max_runs: 3
     prompt: |
-      实现Chunk 1: 项目骨架。
+      实现Chunk 1: 项目骨架。只搭骨架，不写实现代码。模块文件只放pub类型声明和空函数签名。
 
       设计文档: ${nodes.read_design.output}
       实现计划: ${nodes.read_plan.output}
@@ -56,7 +57,7 @@ nodes:
 
       任务:
       1. Cargo workspace (root Cargo.toml, rust-toolchain.toml)
-      2. planck-core crate，建空模块文件 (plan/topo/cost/algo/sched/template)
+      2. planck-core crate，空模块文件 (plan/topo/cost/algo/sched/template) — 只放pub struct/enum声明，函数体用todo!()
       3. planck-python crate骨架 (PyO3)
       4. pyproject.toml (maturin)
       5. 验证: `cargo build` 零warning通过
@@ -236,6 +237,7 @@ nodes:
   # ---- 报告 ----
   report:
     role: meta
+    max_runs: 1
     deps: [gate_python]
     prompt: |
       撰写Planck v0.1 Phase A实现总结报告。
