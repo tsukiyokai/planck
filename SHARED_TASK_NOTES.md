@@ -457,3 +457,37 @@ macOS可预做: C++ headers + mock transport + PlanView (Chunk 6 partial)。
 内容: CostModel{alpha,beta,gamma} + from_topology() + ring_allreduce() + 3测试，共75行。
 代码位置: crates/planck-core/src/cost.rs
 编译管道集成: plan.rs的compile()中调用CostModel::from_topology()。
+
+## impl_algo验证 (2026-03-20)
+
+目标: 实现 algo.rs — Ring AllReduce算法分解。
+结论: algo.rs在Phase A Chunk 3 (Task 5)中已完整实现，无需额外工作。
+验证: 4/4 algo模块测试通过 + 29/29全部Rust测试通过。
+内容: Phase枚举(RS/AG) + AlgoStep结构体 + ring_allreduce() + 4测试，共120行。
+代码位置: crates/planck-core/src/algo.rs
+编译管道集成: plan.rs的compile()中调用algo::ring_allreduce()生成步骤，传入sched::schedule()。
+
+## impl_sched验证 (2026-03-20)
+
+目标: 实现 sched.rs — 双缓冲流水线调度器。
+结论: sched.rs在Phase A Chunk 3 (Task 6)中已完整实现，无需额外工作。
+验证: 4/4 sched模块测试通过 + 29/29全部Rust测试通过。二次验证(本轮): cargo test 29 passed。
+内容: ScheduleResult结构体 + schedule() + 4测试，共208行。
+代码位置: crates/planck-core/src/sched.rs
+编译管道集成: plan.rs的compile()中调用sched::schedule()生成OpEntry指令，传入fuse()。
+关键设计: pipeline chunk c -> stream c, 每chunk分配N个input + N个output + 2个scratch(双缓冲), ring_piece = msg_size/(chunks*ranks)。
+
+## gate_fuse_compile验证 (2026-03-20)
+
+目标: 在plan.rs中添加指令融合pass(fuse)和顶层compile()函数。
+结论: fuse()和compile()在Phase A Chunk 3 (Task 7)中已完整实现，无需额外工作。
+验证: 29/29 Rust测试通过，含目标要求的全部4个测试:
+- fusion_put_signal: Put+Signal -> PutWithSignal (2→1)
+- fusion_wait_reduce_put: Wait+LocalReduce+Put -> WaitReducePut (3→1)
+- fusion_preserves_unfusable: Noop+Put保持不变 (2→2)
+- compile_produces_valid_plan: 256MB/4chunk, magic正确, ops>0且<224
+
+代码位置:
+- fuse(): plan.rs:237-324 (贪心滑动窗口, 最长优先匹配)
+- compile(): plan.rs:329-356 (topo→cost→algo→sched→fuse→ExecutionPlan)
+- CompileRequest/Collective: plan.rs:215-227
