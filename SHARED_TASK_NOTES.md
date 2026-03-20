@@ -491,3 +491,29 @@ macOS可预做: C++ headers + mock transport + PlanView (Chunk 6 partial)。
 - fuse(): plan.rs:237-324 (贪心滑动窗口, 最长优先匹配)
 - compile(): plan.rs:329-356 (topo→cost→algo→sched→fuse→ExecutionPlan)
 - CompileRequest/Collective: plan.rs:215-227
+
+## Chunk 4验证 (2026-03-20)
+
+目标: template.rs + 端到端仿真测试 + Criterion benchmark。
+结论: Chunk 4 (Tasks 8-10)在Phase A中已完整实现，无需额外工作。
+验证: 29/29 Rust测试通过 + 4个Criterion benchmark通过。
+
+Task 8 - E2E仿真:
+- simulate_ring_allreduce: 算法层lockstep, 8 rank各持[r+1;64], 验证AllReduce结果=[36.0;64]
+- simulate_plan_execution: Plan层lockstep, 含fused op模拟, two-phase put/apply, 验证=[36.0;nf]
+- 代码位置: plan.rs:476-537(algo仿真), plan.rs:543-681(plan仿真)
+
+Task 9 - PlanTemplate:
+- from_plan(): 冻结ops, buffer sizes线性参数化(offset_scale, size_scale)
+- instantiate(): O(num_buffers), 实测74ns (红线<1us, 余量13x)
+- 3测试: template_creation / template_instantiation / instantiation_is_fast
+- 代码位置: template.rs:1-124
+
+Task 10 - Criterion Benchmark:
+- compile_256mb_4chunk: ~1.36us (红线<1ms, 余量~700x)
+- compile_16kb_1chunk: ~586ns
+- compile_1mb_2chunk: ~870ns
+- instantiate_16kb: ~74ns (红线<1us, 余量~13x)
+- 代码位置: benches/compile_bench.rs:1-51
+
+Phase A全部Chunks (1-5)已完成。整个项目进入Phase B等待状态。
