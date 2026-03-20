@@ -436,12 +436,323 @@ Chunk 7 (torchair + Benchmarks): 2 tasks
 
 ---
 
+## Lockstep仿真逻辑深度分析
+
+> 精读 plan.rs:476-681 两个仿真测试。
+> 目标: 为C++ executor和planck-sim提供可复现的参考语义。
+
+### 两层验证体系
+
+| 测试                        | 验证层级            | 数据结构                     | 核心验证目标               |
+|:----------------------------|:--------------------|:----------------------------|:--------------------------|
+| `simulate_ring_allreduce`   | 算法层 (algo.rs)    | `data[rank][chunk][elem]` 3D | chunk index公式正确性      |
+| `simulate_plan_execution`   | 全编译管道          | `data[rank][flat]` 1D + BufEntry | sched+fuse+execute端到端  |
+
+两测试用相同参数: 8 rank, msg_size=256B, 64个f32, 期望结果=[36.0; 64] (1+2+...+8=36)。
+
+### simulate_ring_allreduce (plan.rs:476-537) — 算法层
+
+执行模型: 逐step lockstep，每step先snapshot所有rank的发送数据，再处理接收。
+
+```
+for step in 0..14:                    // 7 RS + 7 AG
+    sends[r] = data[r][send_chunk]    // snapshot BEFORE mutate
+    for r in 0..8:
+        if RS: data[r][recv_chunk] += sends[src_rank]   // accumulate
+        if AG: data[r][recv_chunk]  = sends[src_rank]   // overwrite
+```
+
+为什么先snapshot? 不snapshot的话，如果rank 0先处理完(修改了自己的data)，rank 1再发送时读到的就是rank 0的已修改数据。snapshot保证所有rank在同一step看到的是"上一step结束时"的一致状态。
+
+### simulate_plan_execution (plan.rs:543-681) — 全管道
+
+#### 内存模型
+
+```
+data[rank]:    Vec<f32>   大小nf=64    对应 BufPool::Input 和 BufPool::Output
+scratch[rank]: Vec<f32>   大小由buffer table推算   对应 BufPool::Scratch
+```
+
+Input和Output共享同一个data数组(in-place AllReduce)。BufEntry的offset字段做byte->f32换算: `off = buf.offset / 4`。
+
+scratch大小计算: 取所有Scratch BufEntry中`(offset + size)`的最大值，向上对齐到f32边界。
+
+#### 执行模型: 双阶段逐指令
+
+```
+for op_idx in 0..num_ops:
+    // Phase 1: 所有rank执行local ops + 暂存puts
+    puts = []
+    for rank in 0..8:
+        op = plans[rank].ops[op_idx]
+        match op.opcode:
+            Noop | Signal | Wait  -> skip (lockstep隐式同步)
+            Put | PutWithSignal   -> puts.push(dst_rank, dst_off, read(src_buf))
+            LocalReduce           -> data[rank][dst] += scratch[rank][src]
+            LocalCopy             -> data[rank][dst]  = scratch[rank][src]
+            WaitReducePut         -> reduce then stage put (see below)
+            WaitReduceCopy        -> reduce then copy (see below)
+
+    // Phase 2: 将暂存的puts写入远端scratch
+    for (dst_rank, dst_off, vals) in puts:
+        scratch[dst_rank][dst_off..] = vals
+```
+
+#### Fused Op语义 (关键: _pad字段复用)
+
+WaitReducePut (RS phase产生):
+1. Reduce: `data[rank][dst_buf.off] += scratch[rank][src_buf.off]`
+2. Put: 读reduce后的`data[rank][dst_buf.off]`，暂存到`puts`
+3. _pad存储: put在远端的目标buffer index (即远端scratch的BufEntry index)
+
+WaitReduceCopy (AG phase最后一步, RS最后结果已在input中):
+1. Reduce: `data[rank][_pad.off] += scratch[rank][src_buf.off]`
+2. Copy: `data[rank][dst_buf.off] = data[rank][_pad.off]`
+3. _pad存储: reduce的目标buffer index (input chunk, 非output)
+4. dst_buf: copy的目标 (output chunk)
+
+#### 为什么双阶段(Two-Phase)是必须的
+
+考虑: rank A执行Put写入rank B的scratch，同时rank B执行LocalReduce读自己的scratch。如果Put立即生效，rank B可能读到half-written数据。
+
+双阶段保证: Phase 1中所有Put只暂存不生效，Phase 2统一apply。等价于"所有rank先完成本地计算，再通信"。
+
+在真实硬件上: put+signal+wait协议天然提供这个保证——Wait阻塞直到Signal到达，Signal只在Put完成后发出。所以仿真跳过Signal/Wait是安全的。
+
+#### 对称性不变量
+
+`plans[0].ops.len() == plans[r].ops.len()` for all r。这由sched.rs保证: 每个rank的AlgoStep数相同(2*(n-1))，每步生成4个op，总数一致。fusion后仍对称(因为fusion pattern只依赖opcode序列，各rank的opcode序列结构相同)。
+
+### C++ Executor复现清单
+
+1. 9种opcode处理: 5基础 + 3 fused + Noop (fused必须正确读_pad)
+2. BufPool路由: Input/Output -> 用户tensor, Scratch -> executor管理的buffer
+3. 序号一致性: C++ for-loop顺序必须与Rust ops Vec顺序一致
+4. 双阶段语义: 真实transport的put+signal+wait天然保证；mock transport需显式双阶段
+5. in-place语义: Input和Output指向同一tensor (AllReduce场景)
+
+### planck-sim复现清单
+
+与C++ executor相同，但用纯软件模拟transport:
+1. 可以直接复制Rust测试的双阶段逻辑
+2. 需要支持多pipeline chunk (Rust测试只用chunks=1)
+3. 验证: 跑相同参数，结果必须bit-exact
+
+---
+
+## Phase B macOS Design Distillation (2026-03-20)
+
+> 精读 `docs/plans/2026-03-20-phase-b-macos-design.md` 和 `docs/plans/2026-03-20-phase-b-macos-impl.md` 后提炼。
+> 聚焦5个关键技术点: _pad字段、MockWorld远端寻址、3轮notify、GET模式、InlineReduce重叠。
+
+---
+
+### 总览: 两个独立Block
+
+```
+Block 1: C++ Executor + PyTorch Eager    verify "data correct?"  (functional correctness)
+Block 2: planck-sim DES                  verify "timeline good?" (schedule quality)
+Independent, can be developed in parallel. Share plan bytes, not code.
+```
+
+不做: graph_pass.py / torchair集成 / 入图测试 / bench_vs_hccl.py (需Ascend硬件)。
+
+---
+
+### Block 1 关键设计决策
+
+#### 决策1: _pad字段的双重语义 (核心FFI契约)
+
+OpEntry._pad (u16) 在未融合指令中未使用,融合后承载不同语义:
+
+| 融合指令          | _pad含义                    | Rust赋值 (plan.rs:266)         | C++读取 (engine.cpp)                 |
+|:-----------------|:---------------------------|:------------------------------|:------------------------------------|
+| WaitReducePut    | put的远端buffer index       | `ops[i+2].dst_buf` (Put的dst) | `transport.put(dst_rank,dst,size,op._pad,0)` |
+| WaitReduceCopy   | reduce的目标buffer index    | `ops[i+1].dst_buf` (Reduce的dst) | `resolve(op._pad)` 作reduce目标+copy源 |
+| PutWithSignal    | 未使用, 置0                 | `_pad: 0`                     | 不读取                               |
+
+WaitReducePut执行顺序 (engine.cpp):
+1. Wait: `transport.wait(op.dst_rank)` -- 等远端数据到达本地scratch
+2. Reduce: `dst_buf[j] += src_buf[j]` -- 本地reduce (src=scratch, dst=input[chunk])
+3. Put: `transport.put(op.dst_rank, dst, size, op._pad, 0)` -- _pad寻址远端
+
+为什么_pad而非新增字段: OpEntry是16B (4字节flags+6个u16=16), repr(C)与C++的`#pragma pack(1)`镜像。
+_pad是对齐产生的"免费"语义槽位,避免增大struct破坏ABI。
+
+WaitReduceCopy执行顺序:
+1. Wait: `transport.wait(op.dst_rank)`
+2. Reduce: `buf[_pad] += buf[src_buf]` -- _pad是reduce目标 (input[chunk])
+3. Copy: `buf[dst_buf] = buf[_pad]` -- 从reduce结果copy到output
+
+#### 决策2: MockWorld远端buffer寻址 (buffer index抽象)
+
+```
+Transport::put(dst_rank, local_src, size, remote_buf_idx, offset)
+                                         ^^^^^^^^^^^^^^^^
+                                         not a raw pointer, but a buffer index
+```
+
+设计要点:
+- put()第4参数是远端rank的buffer table index,不是本地指针
+- MockWorld持有所有rank的buffer指针表: `ranks[dst_rank].resolve_buf(remote_buf_idx)`
+- resolve流程: buf_idx -> BufEntry{pool, offset, size} -> pool决定base(input/output/scratch) -> base + offset
+
+为什么用index而非指针:
+- mock场景: 共享内存中所有rank的buffer都在同一进程,用index查找世界状态
+- HCCS真机: remote_buf_idx映射到RDMA remote memory region key + offset
+- 统一抽象: Transport接口不暴露地址空间差异
+
+MockWorld同步: signals[src][dst] int矩阵 + 单mutex/condvar。
+setup_rank(): 注册buffer地址 + plan的BufEntry表,供resolve_remote()使用。
+
+#### 决策3: 构建隔离
+
+C++ cmake和Rust cargo完全独立,通过plan bytes文件交互:
+- gen_fixtures.py: 用PyO3调Rust编译器 -> 生成.bin文件
+- C++ test: 读取.bin -> PlanView(zero-copy reinterpret_cast) -> Executor::execute()
+- find_package(Torch QUIET): 有libtorch编译torch_binding,没有跳过
+- 测试框架: 纯assert + test_util.h (~30行), 不引入Catch2/GTest
+
+#### 决策4: PyTorch Eager路径
+
+```
+torch.ops.planck.pipelined_allreduce(a, b, plan_key)
+  -> C++ TORCH_LIBRARY -> PlanCache -> Executor::execute(plan, config)
+  -> MockTransport -> result tensor
+```
+
+FakeTensor注册: `@torch.library.register_fake("planck::allreduce")` -- torch.compile tracing用。
+
+---
+
+### Block 2 关键设计决策
+
+#### 决策5: 3轮Notify握手 (AscendModel)
+
+来源: HCOMM phase2-hcomm-platform源码。
+
+```
+AscendModel::notify_time(link) = notify_rounds * link.latency_us = 3 * 1.5us = 4.5us
+```
+
+物理含义: HCCS通信前的3轮信令握手:
+1. 发送方通知接收方"我要写数据"
+2. 接收方确认buffer就绪
+3. 发送方确认开始传输
+
+每次Wait操作都会计入此开销,是小消息通信的显著瓶颈。
+
+#### 决策6: GET模式 vs PUT模式 (HCCS特有)
+
+```
+PUT: latency = 1 * lat + data_time     (sender pushes)
+GET: latency = 2 * lat + data_time     (receiver requests then sender sends)
+```
+
+AscendModel用GET建模 (来源: prim_rules.cc):
+`put_time = 2.0 * link.latency_us + size / (bw * 1e3)`
+
+额外1个latency: GET先发请求包,等数据返回。vs NVLink PUT模式只需1个latency。
+
+#### 决策7: InlineReduce重叠 (MTE+AIV物理隔离)
+
+```
+SimpleModel:  inline_reduce_put = reduce_time + put_time        (sum, no overlap)
+AscendModel:  inline_reduce_put = notify_time + max(reduce, put) (overlap!)
+```
+
+物理根据: DaVinci架构的MTE(Memory Transfer Engine)和AIV(AI Vector)是独立流水线:
+- MTE: DMA搬运 (put操作)
+- AIV: 向量计算 (reduce操作)
+- 两者可同时工作,取max而非sum。来源: dispatcher_pub.h (HCOMM)
+
+验证: timing.rs测试 `assert!(fused < separate)` 确认重叠效果。
+
+#### 决策8: DES引擎架构
+
+```
+Simulator { queue: BinaryHeap, clock: f64, links: Vec<LinkState>,
+            signals: Vec<Vec<i32>>, waiting: Vec<Option<u16>> }
+```
+
+EventKind: OpStart / OpEnd / PutEnd(释放链路) / Unblock(signal到达唤醒wait)
+链路竞争: `effective_bw = link_bw / active_flows` (公平共享)
+
+Wait处理: signal到则立即消费; signal未到则设waiting[rank], 等Signal事件触发Unblock。
+
+#### 决策9: Chrome Trace 4层嵌套
+
+```
+Collective (AllReduce 256MB)          pid=rank, tid=0
+  Pipeline_Chunk (chunk 0/1/2/3)      B/E nesting
+    Op (Put/Wait/Reduce/...)          X event
+      HwAction (notify/dma)           X event, cat="hw"
+```
+
++ flow event (rank间Put箭头) + counter event (链路利用率)
+
+#### 决策10: TimingModel可插拔
+
+```rust
+trait TimingModel: put_time / notify_time / reduce_time / inline_reduce_put_time / kernel_launch_overhead
+```
+
+3种实现: SimpleModel(alpha-beta) / AscendModel(硬件感知) / CalibratedModel(真机校准, post-v0.1)。
+sim模块用feature flag隔离: `--features sim`启用, 依赖toml+serde (可选)。
+
+---
+
+### 跨Block设计发现
+
+1. _pad是Rust-C++ FFI隐式契约: C++ executor对_pad的解读必须与Rust fuse()的赋值完全一致。设计文档分散描述,需交叉阅读impl的engine.cpp和design的WaitReducePut说明。
+
+2. Mock和真机Transport接口完全一致: `put(dst_rank, src, size, remote_buf_idx, offset)`。差异仅在实现层: MockWorld用memcpy, HCCS用RDMA+DMA engine。
+
+3. DES仿真器不模拟数据: 只模拟时间。Block 1验证"数据对不对", Block 2验证"schedule好不好"。
+
+4. AscendModel的6个参数全部来自HCOMM源码 (非猜测值):
+   - 3轮notify: phase2-hcomm-platform
+   - GET模式2x latency: prim_rules.cc
+   - SQE队列深度2048: stream_pub.h
+   - 门铃批处理每10WQE: send_recv_executor
+   - InlineReduce max: dispatcher_pub.h
+   - CQ轮询10us: transport_roce.cc
+
+5. TOML配置默认值 (30 GB/s, 1.5us lat, 3 notify rounds, 460 GB/s HBM) 与topo.rs一致。校准时改TOML不改代码。
+
+---
+
+### 执行计划 (Phase B macOS)
+
+Block 1 (C++ Executor):
+- [ ] gen_fixtures: Python脚本生成8个rank的plan .bin文件
+- [ ] impl_cpp_ffi: plan.h + transport.h + executor.h + mock.cpp + CMakeLists.txt + test_util.h (~250行)
+- [ ] gate_ffi: cmake build + ctest test_plan
+- [ ] impl_executor: engine.cpp 9种opcode, 特别注意WaitReducePut的_pad (~300行)
+- [ ] gate_exec: 8线程仿真, 输出=[36.0, ...] (sum 1..8)
+- [ ] impl_torch_eager: torch_binding.cpp + ops.py (~200行)
+- [ ] gate_eager: pytest test_torch_eager.py
+
+Block 2 (planck-sim DES):
+- [ ] impl_sim_engine: Cargo.toml feature gate + config.rs + engine.rs + link.rs (~500行)
+- [ ] gate_sim_core: cargo test --features sim
+- [ ] impl_sim_trace: timing.rs (Simple+Ascend) + trace.rs (Chrome Trace) (~300行)
+- [ ] gate_sim: 集成测试 (pipeline_overlap + monotonic + InlineReduce)
+- [ ] impl_sim_pyo3: planck-python绑定 + simulate() API (~50行)
+- [ ] gate_sim_py: pytest test_sim.py
+
+### 风险
+
+1. PlanView zero-copy: C++用reinterpret_cast直读, 依赖struct layout完全一致, static_assert是唯一安全网
+2. MockWorld单mutex: 8线程够用, 更多rank需改同步方案
+3. DES精度: analytical model, 8%误差目标来自Echo论文, 尚未校准
+4. libtorch可选: macOS上可能没有, torch_binding会被跳过
+5. sim feature: planck-python直接启用sim, maturin develop后toml/serde会编译进wheel
+
 ## Next Step
 
-Phase A code complete, all tests pass. 此文件的当前用途是记录提炼结果，供后续Phase B迭代参考。
-
-Phase B进入条件: Ascend NPU hardware + CANN SDK。
-macOS可预做: C++ headers + mock transport + PlanView (Chunk 6 partial)。
+Phase B设计文档精读完成。下一轮建议从Block 1 gen_fixtures开始 (依赖最少, 验证FFI契约)。
+两Block可并行,但Block 1优先 (验证_pad契约是最高风险项)。
 
 ## impl_topo分支验证 (2026-03-20)
 
@@ -516,7 +827,7 @@ Task 10 - Criterion Benchmark:
 - instantiate_16kb: ~74ns (红线<1us, 余量~13x)
 - 代码位置: benches/compile_bench.rs:1-51
 
-Phase A全部Chunks (1-5)已完成。整个项目进入Phase B等待状态。
+Phase A全部Chunks (1-5)已完成。整个项目进入Phase B。
 
 ## Chunk 5 PyO3绑定 -- 三次验证均通过 (2026-03-20)
 
@@ -530,3 +841,97 @@ Phase A全部Chunks (1-5)已完成。整个项目进入Phase B等待状态。
 - 注意: `cargo test --all` 对planck-python crate显示0 tests (正常 -- PyO3 crate无Rust tests, 只有Python tests)
 
 Phase A Chunks 1-5全部完成，项目进入Phase B等待状态。
+
+## Phase A总结报告验证 (2026-03-20)
+
+目标: 撰写Phase A实现总结报告。
+结论: 报告已存在于 `docs/phase-a-summary.md`，经三重验证数据一致。
+
+验证结果:
+- cargo test: 29/29 passed (与报告一致)
+- pytest: 4/4 passed (与报告一致)
+- 代码行数: 1,688 total (与报告精确一致)
+- Benchmark (本次运行 vs 报告数据):
+  - compile_256mb_4chunk: 1.39us vs 1.36us (噪声范围)
+  - compile_16kb_1chunk:  613ns  vs 581ns  (噪声范围)
+  - compile_1mb_2chunk:   886ns  vs 871ns  (噪声范围)
+  - instantiate_16kb:     77ns   vs 73ns   (噪声范围)
+
+报告覆盖的5个维度: 实现内容(Section 2) / 测试结果(Section 3) / Benchmark(Section 4) / 遇到的问题(Section 5) / Phase B就绪度(Section 7)。无需额外工作。
+
+---
+
+## Phase B Chunk 5: DES Engine Core (Tasks 11-12)
+
+目标: 实现planck-sim DES仿真器核心, 通过 `cargo test -p planck-core --features sim -- sim`
+
+### 依赖分析
+
+用户指定的6个文件(Cargo.toml, lib.rs, mod.rs, config.rs, engine.rs, link.rs)编译时依赖timing.rs和trace.rs(impl plan的Chunk 6 Task 13-14)。engine.rs imports `timing::TimingModel`, `trace::Trace`; mod.rs imports `timing::create_model`。
+
+决策: 同步实现timing.rs和trace.rs完整版。代码量小(~250行),且属于同一sim/模块,拆分到Chunk 6只是计划粒度问题。
+
+### 发现: impl plan WaitReducePut signal/wait bug
+
+impl plan的engine.rs对WaitReducePut用 `op.dst_rank` 作Wait source:
+```rust
+let src = op.dst_rank as usize; // Bug: 这是Put目标(next), 不是Wait来源(prev)
+```
+
+根因: fuse()将WaitReducePut的dst_rank设为Put的dst_rank(ops[i+2]), 覆盖了Wait source(ops[i].dst_rank)。
+- WaitReduceCopy不受影响: dst_rank = ops[i].dst_rank = Wait source
+- WaitReducePut受影响: dst_rank = ops[i+2].dst_rank = Put destination
+
+Ring 8卡验证: rank 0的WaitReducePut的dst_rank=1(next), 但Wait应等rank 7(prev)的signal。engine.rs会检查signals[1][0]=0, 永远为false → 死锁。
+
+修复: fuse() WaitReducePut中 `wait_event: ops[i].dst_rank` 保存Wait source rank。engine.rs读 `op.wait_event` 获取。现有29个测试无任何检查wait_event值,修改安全。
+
+### plan.rs额外修改
+
+1. `#[derive(Debug, Clone)]` on ExecutionPlan — engine.rs需要plans.to_vec()
+2. `impl TryFrom<u8> for Opcode` — 替代impl plan中的unsafe transmute
+
+### 执行步骤
+
+- [x] 理解需求 + 精读impl plan + 识别bug
+- [x] 修改plan.rs: derive Clone + fuse bug fix + Opcode::from_u8()
+- [x] 修改Cargo.toml: [features] sim = ["toml","serde"]
+- [x] 修改lib.rs: #[cfg(feature="sim")] pub mod sim
+- [x] 创建sim/config.rs: SimConfig + TOML解析 + parse_size_str
+- [x] 创建sim/link.rs: LinkState(bw/active_flows公平共享)
+- [x] 创建sim/trace.rs: Chrome Trace JSON + total_time
+- [x] 创建sim/timing.rs: TimingModel trait + SimpleModel + AscendModel
+- [x] 创建sim/engine.rs: DES核心(BinaryHeap + signal/wait + link竞争)
+- [x] 创建sim/mod.rs: simulate() API + 4集成测试
+- [x] cargo build --features sim — 0 errors, 0 warnings
+- [x] cargo test --features sim -- sim — 17/17 passed
+- [x] cargo test -p planck-core — 29/29 passed (无回归)
+- [x] cargo test -p planck-core --features sim — 44/44 passed (29原有 + 15新增)
+
+### 风险 (已解决)
+
+1. signal/wait语义: 已修复,用wait_event携带Wait source → sim_completes_without_deadlock测试验证
+2. ExecutionPlan Clone: derive(Debug, Clone)无副作用
+3. Opcode from_u8: match-based实现替代unsafe transmute
+
+### 产物清单
+
+修改:
+- crates/planck-core/Cargo.toml — +sim feature, +toml/serde可选依赖
+- crates/planck-core/src/lib.rs — +cfg-gated sim module
+- crates/planck-core/src/plan.rs — +derive Clone, +from_u8(), fix fuse() wait_event
+
+新建:
+- crates/planck-core/src/sim/mod.rs — simulate() API + 4集成测试
+- crates/planck-core/src/sim/config.rs — SimConfig + TOML解析 + 3测试
+- crates/planck-core/src/sim/engine.rs — DES核心 + 1测试
+- crates/planck-core/src/sim/link.rs — LinkState + 2测试
+- crates/planck-core/src/sim/timing.rs — TimingModel + Simple + Ascend + 3测试
+- crates/planck-core/src/sim/trace.rs — Chrome Trace JSON + 2测试
+
+## Next Step
+
+Chunk 5 (Tasks 11-12) + Chunk 6 (Tasks 13-14)已完成。下一步:
+- Chunk 7 Task 15: Rust集成测试(已在mod.rs中前置完成)
+- Chunk 7 Task 16: PyO3 simulate()绑定 (crates/planck-python/src/lib.rs)
+- Chunk 7 Task 17: Python测试 + planck-sim.toml示例

@@ -80,6 +80,7 @@ pub struct OpEntry {
 
 // ==== ExecutionPlan ====
 
+#[derive(Debug, Clone)]
 pub struct ExecutionPlan {
     pub header:  PlanHeader,
     pub buffers: Vec<BufEntry>,
@@ -249,6 +250,7 @@ pub fn fuse(ops: Vec<OpEntry>) -> Vec<OpEntry> {
             // Wait + LocalReduce + Put -> WaitReducePut
             // src=reduce_src(scratch), dst=reduce_dst=put_src(input[chunk])
             // _pad=put_dst on remote(scratch), dst_rank=put destination
+            // wait_event=Wait source rank (used by DES engine for signal matching)
             if a == Opcode::Wait as u8
                 && b == Opcode::LocalReduce as u8
                 && c == Opcode::Put as u8
@@ -261,7 +263,7 @@ pub fn fuse(ops: Vec<OpEntry>) -> Vec<OpEntry> {
                     src_buf:      ops[i + 1].src_buf,
                     dst_buf:      ops[i + 1].dst_buf,
                     dst_rank:     ops[i + 2].dst_rank,
-                    wait_event:   ops[i].wait_event,
+                    wait_event:   ops[i].dst_rank, // Wait source rank
                     signal_event: ops[i + 2].signal_event,
                     _pad:         ops[i + 2].dst_buf, // put dst buf on remote
                 });
@@ -352,6 +354,25 @@ pub fn compile(req: &CompileRequest, topo: &crate::topo::Topology) -> ExecutionP
         ),
         buffers: sched_result.buffers,
         ops: fused_ops,
+    }
+}
+
+// ==== Opcode Conversion ====
+
+impl Opcode {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Put),
+            1 => Some(Self::Signal),
+            2 => Some(Self::Wait),
+            3 => Some(Self::LocalCopy),
+            4 => Some(Self::LocalReduce),
+            5 => Some(Self::PutWithSignal),
+            6 => Some(Self::WaitReduceCopy),
+            7 => Some(Self::WaitReducePut),
+            8 => Some(Self::Noop),
+            _ => None,
+        }
     }
 }
 

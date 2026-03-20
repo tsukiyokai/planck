@@ -4,3 +4,5 @@ pub mod cost;
 pub mod algo;
 pub mod sched;
 pub mod template;
+#[cfg(feature = "sim")]
+pub mod sim;
