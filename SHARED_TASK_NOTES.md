@@ -448,3 +448,12 @@ macOS可预做: C++ headers + mock transport + PlanView (Chunk 6 partial)。
 目标: 实现 topo.rs — 8卡HCCS拓扑。
 结论: topo.rs在Phase A Chunk 2中已完整实现，无需额外工作。
 验证: 29/29 Rust测试通过(含topo模块3个测试 + 其他模块使用topo的测试)。
+
+## impl_cost验证 (2026-03-20)
+
+目标: 实现 cost.rs -- alpha-beta-gamma代价模型。
+结论: cost.rs在Phase A Chunk 2 (Task 4)中已完整实现，无需额外工作。
+验证: 3/3 cost模块测试通过(cost_from_topology, ring_allreduce_cost_scales_with_size, ring_cost_formula)。
+内容: CostModel{alpha,beta,gamma} + from_topology() + ring_allreduce() + 3测试，共75行。
+代码位置: crates/planck-core/src/cost.rs
+编译管道集成: plan.rs的compile()中调用CostModel::from_topology()。
