@@ -1,0 +1,20 @@
+# planck-sim.toml — example configuration for planck-sim
+
+[collective]
+type = "allreduce"
+msg_size = "256MB"
+pipeline_chunks = 4
+
+[topology]
+preset = "hccs_8card"
+
+[timing]
+model = "ascend"
+hccs_bw_gbps = 30.0
+hccs_lat_us = 1.5
+notify_rounds = 3
+hbm_bw_gbps = 460.0
+
+[output]
+format = "chrome_trace"
+file = "trace.json"

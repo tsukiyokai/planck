@@ -235,6 +235,30 @@ impl PlanCache {
     }
 }
 
+// ==== Simulation ====
+
+#[pyfunction]
+#[pyo3(signature = (plans, config_toml=None))]
+fn simulate(
+    py: Python<'_>,
+    plans: Vec<PyRef<'_, PyPlanView>>,
+    config_toml: Option<&str>,
+) -> PyResult<String> {
+    use planck_core::sim;
+
+    let cfg = match config_toml {
+        Some(s) => sim::SimConfig::from_toml(s)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?,
+        None => sim::SimConfig::default(),
+    };
+
+    let exec_plans: Vec<_> = plans.iter().map(|p| p.plan.clone()).collect();
+    let topo = Topology::hccs_8card();
+
+    let trace = py.allow_threads(|| sim::simulate(&exec_plans, &topo, &cfg));
+    Ok(trace.to_json())
+}
+
 // ==== Module ====
 
 #[pymodule]
@@ -244,5 +268,6 @@ fn _planck(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPlanTemplate>()?;
     m.add_class::<PlanCompiler>()?;
     m.add_class::<PlanCache>()?;
+    m.add_function(wrap_pyfunction!(simulate, m)?)?;
     Ok(())
 }

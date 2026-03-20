@@ -7,6 +7,7 @@ from planck._planck import (
     PlanCache,
     PyPlanView,
     PyPlanTemplate,
+    simulate,
 )
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "PlanCache",
     "PyPlanView",
     "PyPlanTemplate",
+    "simulate",
 ]
