@@ -517,3 +517,16 @@ Task 10 - Criterion Benchmark:
 - 代码位置: benches/compile_bench.rs:1-51
 
 Phase A全部Chunks (1-5)已完成。整个项目进入Phase B等待状态。
+
+## Chunk 5 PyO3绑定 -- 三次验证均通过 (2026-03-20)
+
+目标: 实现Chunk 5 PyO3绑定。
+结论: 代码已在先前迭代中完整实现，多轮验证确认无误。
+
+最新验证 (第三轮):
+- `cargo test -p planck-core` 29/29 passed
+- `maturin develop` 构建成功 (CPython 3.13, macOS arm64)
+- `pytest tests/test_plan_compile.py` 4/4 passed (test_import/test_compile_allreduce/test_plan_cache/test_template_instantiate)
+- 注意: `cargo test --all` 对planck-python crate显示0 tests (正常 -- PyO3 crate无Rust tests, 只有Python tests)
+
+Phase A Chunks 1-5全部完成，项目进入Phase B等待状态。
