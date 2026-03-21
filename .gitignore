@@ -15,4 +15,6 @@ ccx*.log
 # IDE
 .idea/
 .vscode/
+# dage workflow configs + shared notes
 SHARED_TASK_NOTES.md
+planck*.yaml
