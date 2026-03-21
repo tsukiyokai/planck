@@ -6,8 +6,8 @@
 use crate::topo::Topology;
 
 pub struct CostModel {
-    pub alpha_us:         f64, // startup latency per step (us)
-    pub beta_us_per_byte: f64, // per-byte transfer time (us/byte)
+    pub alpha_us: f64,          // startup latency per step (us)
+    pub beta_us_per_byte: f64,  // per-byte transfer time (us/byte)
     pub gamma_us_per_byte: f64, // per-byte compute time (us/byte)
 }
 
@@ -17,8 +17,8 @@ impl CostModel {
         // Use first link's properties (uniform topology in v0.1)
         let link = &topo.links[0];
         Self {
-            alpha_us:          link.latency_us,
-            beta_us_per_byte:  1.0 / (link.bandwidth_gbps * 1e9 / 1e6), // us/byte = 1/(GB/s * 1e9 / 1e6)
+            alpha_us: link.latency_us,
+            beta_us_per_byte: 1.0 / (link.bandwidth_gbps * 1e9 / 1e6), // us/byte = 1/(GB/s * 1e9 / 1e6)
             gamma_us_per_byte: 0.0, // ignore compute cost for v0.1
         }
     }
@@ -62,11 +62,7 @@ mod tests {
 
     #[test]
     fn ring_cost_formula() {
-        let cost = CostModel {
-            alpha_us:          10.0,
-            beta_us_per_byte:  0.001,
-            gamma_us_per_byte: 0.0,
-        };
+        let cost = CostModel { alpha_us: 10.0, beta_us_per_byte: 0.001, gamma_us_per_byte: 0.0 };
         let t = cost.ring_allreduce(8000, 8);
         let expected = 2.0 * 7.0 * 10.0 + 2.0 * 7.0 / 8.0 * 8000.0 * 0.001;
         assert!((t - expected).abs() < 1e-6);

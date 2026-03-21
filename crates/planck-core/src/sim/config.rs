@@ -7,19 +7,19 @@ pub struct SimConfig {
     #[serde(default)]
     pub collective: CollectiveConfig,
     #[serde(default)]
-    pub topology:   TopoConfig,
+    pub topology: TopoConfig,
     #[serde(default)]
-    pub timing:     TimingConfig,
+    pub timing: TimingConfig,
     #[serde(default)]
-    pub output:     OutputConfig,
+    pub output: OutputConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CollectiveConfig {
     #[serde(rename = "type", default = "default_coll_type")]
-    pub coll_type:       String,
+    pub coll_type: String,
     #[serde(default = "default_msg_size", deserialize_with = "deser_size")]
-    pub msg_size:        usize,
+    pub msg_size: usize,
     #[serde(default = "default_chunks")]
     pub pipeline_chunks: usize,
 }
@@ -33,15 +33,15 @@ pub struct TopoConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TimingConfig {
     #[serde(default = "default_model")]
-    pub model:         String,
+    pub model: String,
     #[serde(default = "default_bw")]
-    pub hccs_bw_gbps:  f64,
+    pub hccs_bw_gbps: f64,
     #[serde(default = "default_lat")]
-    pub hccs_lat_us:   f64,
+    pub hccs_lat_us: f64,
     #[serde(default = "default_notify")]
     pub notify_rounds: u32,
     #[serde(default = "default_hbm")]
-    pub hbm_bw_gbps:   f64,
+    pub hbm_bw_gbps: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,26 +49,30 @@ pub struct OutputConfig {
     #[serde(default = "default_format")]
     pub format: String,
     #[serde(default = "default_file")]
-    pub file:   String,
+    pub file: String,
 }
 
 // ==== Defaults (match topo.rs calibrated constants) ====
 
 fn default_coll_type() -> String { "allreduce".into() }
-fn default_msg_size()  -> usize  { 256 << 20 } // 256 MB
-fn default_chunks()    -> usize  { 4 }
-fn default_preset()    -> String { "hccs_8card".into() }
-fn default_model()     -> String { "ascend".into() }
-fn default_bw()        -> f64    { 30.0 }   // GB/s
-fn default_lat()       -> f64    { 1.5 }    // us
-fn default_notify()    -> u32    { 3 }      // 3-round handshake
-fn default_hbm()       -> f64    { 460.0 }  // GB/s
-fn default_format()    -> String { "chrome_trace".into() }
-fn default_file()      -> String { "trace.json".into() }
+fn default_msg_size() -> usize { 256 << 20 } // 256 MB
+fn default_chunks() -> usize { 4 }
+fn default_preset() -> String { "hccs_8card".into() }
+fn default_model() -> String { "ascend".into() }
+fn default_bw() -> f64 { 30.0 } // GB/s
+fn default_lat() -> f64 { 1.5 } // us
+fn default_notify() -> u32 { 3 } // 3-round handshake
+fn default_hbm() -> f64 { 460.0 } // GB/s
+fn default_format() -> String { "chrome_trace".into() }
+fn default_file() -> String { "trace.json".into() }
 
 impl Default for CollectiveConfig {
     fn default() -> Self {
-        Self { coll_type: default_coll_type(), msg_size: default_msg_size(), pipeline_chunks: default_chunks() }
+        Self {
+            coll_type: default_coll_type(),
+            msg_size: default_msg_size(),
+            pipeline_chunks: default_chunks(),
+        }
     }
 }
 impl Default for TopoConfig {
@@ -77,8 +81,11 @@ impl Default for TopoConfig {
 impl Default for TimingConfig {
     fn default() -> Self {
         Self {
-            model: default_model(), hccs_bw_gbps: default_bw(), hccs_lat_us: default_lat(),
-            notify_rounds: default_notify(), hbm_bw_gbps: default_hbm(),
+            model: default_model(),
+            hccs_bw_gbps: default_bw(),
+            hccs_lat_us: default_lat(),
+            notify_rounds: default_notify(),
+            hbm_bw_gbps: default_hbm(),
         }
     }
 }
@@ -88,8 +95,10 @@ impl Default for OutputConfig {
 impl Default for SimConfig {
     fn default() -> Self {
         Self {
-            collective: Default::default(), topology: Default::default(),
-            timing: Default::default(), output: Default::default(),
+            collective: Default::default(),
+            topology: Default::default(),
+            timing: Default::default(),
+            output: Default::default(),
         }
     }
 }
@@ -103,7 +112,9 @@ fn deser_size<'de, D: serde::Deserializer<'de>>(de: D) -> Result<usize, D::Error
 
 pub fn parse_size_str(s: &str) -> Result<usize, String> {
     let s = s.trim();
-    if let Ok(n) = s.parse::<usize>() { return Ok(n); }
+    if let Ok(n) = s.parse::<usize>() {
+        return Ok(n);
+    }
 
     // Split numeric prefix from suffix (1-2 chars)
     let split = s.len().saturating_sub(2);
@@ -113,7 +124,7 @@ pub fn parse_size_str(s: &str) -> Result<usize, String> {
         "KB" => Ok((n * 1024.0) as usize),
         "MB" => Ok((n * 1024.0 * 1024.0) as usize),
         "GB" => Ok((n * 1024.0 * 1024.0 * 1024.0) as usize),
-        _    => Err(format!("unknown size suffix: {s}")),
+        _ => Err(format!("unknown size suffix: {s}")),
     }
 }
 

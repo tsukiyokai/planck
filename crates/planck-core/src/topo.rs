@@ -6,8 +6,8 @@
 
 // ==== Calibratable Constants ====
 
-const HCCS_BW_GBPS: f64 = 30.0;  // GB/s per link (conservative)
-const HCCS_LAT_US: f64  = 1.5;   // microseconds per hop
+const HCCS_BW_GBPS: f64 = 30.0; // GB/s per link (conservative)
+const HCCS_LAT_US: f64 = 1.5; // microseconds per hop
 
 // ==== Types ====
 
@@ -21,17 +21,17 @@ pub enum TransportType {
 
 #[derive(Debug, Clone)]
 pub struct Link {
-    pub src:           usize,
-    pub dst:           usize,
+    pub src: usize,
+    pub dst: usize,
     pub bandwidth_gbps: f64,
-    pub latency_us:    f64,
-    pub transport:     TransportType,
+    pub latency_us: f64,
+    pub transport: TransportType,
 }
 
 #[derive(Debug, Clone)]
 pub struct Topology {
     pub num_ranks: usize,
-    pub links:     Vec<Link>,
+    pub links: Vec<Link>,
 }
 
 impl Topology {
@@ -46,8 +46,8 @@ impl Topology {
                         src,
                         dst,
                         bandwidth_gbps: HCCS_BW_GBPS,
-                        latency_us:     HCCS_LAT_US,
-                        transport:      TransportType::Hccs,
+                        latency_us: HCCS_LAT_US,
+                        transport: TransportType::Hccs,
                     });
                 }
             }
@@ -64,9 +64,7 @@ impl Topology {
     }
 
     /// Simple sequential ring for v0.1: [0, 1, 2, ..., n-1].
-    pub fn ring_order(&self) -> Vec<usize> {
-        (0..self.num_ranks).collect()
-    }
+    pub fn ring_order(&self) -> Vec<usize> { (0..self.num_ranks).collect() }
 }
 
 // ==== Tests ====

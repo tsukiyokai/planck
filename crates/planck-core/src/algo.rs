@@ -14,12 +14,12 @@ pub enum Phase {
 
 #[derive(Debug, Clone)]
 pub struct AlgoStep {
-    pub phase:      Phase,
-    pub step:       u16,   // step index within phase (0..n-2)
-    pub send_chunk: u16,   // data chunk index to send
-    pub recv_chunk: u16,   // data chunk index to receive
-    pub dst_rank:   u16,   // send to
-    pub src_rank:   u16,   // receive from
+    pub phase: Phase,
+    pub step: u16,       // step index within phase (0..n-2)
+    pub send_chunk: u16, // data chunk index to send
+    pub recv_chunk: u16, // data chunk index to receive
+    pub dst_rank: u16,   // send to
+    pub src_rank: u16,   // receive from
     pub needs_reduce: bool,
 }
 
@@ -42,12 +42,12 @@ pub fn ring_allreduce(num_ranks: u16, my_rank: u16) -> Vec<AlgoStep> {
     for k in 0..steps {
         let ki = k as i32;
         result.push(AlgoStep {
-            phase:      Phase::ReduceScatter,
-            step:       k,
+            phase: Phase::ReduceScatter,
+            step: k,
             send_chunk: ((r - ki + n) % n) as u16,
             recv_chunk: ((r - ki - 1 + n) % n) as u16,
-            dst_rank:   dst,
-            src_rank:   src,
+            dst_rank: dst,
+            src_rank: src,
             needs_reduce: true,
         });
     }
@@ -56,12 +56,12 @@ pub fn ring_allreduce(num_ranks: u16, my_rank: u16) -> Vec<AlgoStep> {
     for k in 0..steps {
         let ki = k as i32;
         result.push(AlgoStep {
-            phase:      Phase::AllGather,
-            step:       k,
+            phase: Phase::AllGather,
+            step: k,
             send_chunk: ((r - ki + 1 + n) % n) as u16,
             recv_chunk: ((r - ki + n) % n) as u16,
-            dst_rank:   dst,
-            src_rank:   src,
+            dst_rank: dst,
+            src_rank: src,
             needs_reduce: false,
         });
     }
@@ -96,9 +96,7 @@ mod tests {
     #[test]
     fn ring_rs_chunk_indices() {
         let steps = ring_allreduce(8, 0);
-        let rs_steps: Vec<_> = steps.iter()
-            .filter(|s| s.phase == Phase::ReduceScatter)
-            .collect();
+        let rs_steps: Vec<_> = steps.iter().filter(|s| s.phase == Phase::ReduceScatter).collect();
         // Rank 0, RS step 0: send chunk (0-0+8)%8=0, recv chunk (0-0-1+8)%8=7
         assert_eq!(rs_steps[0].send_chunk, 0);
         assert_eq!(rs_steps[0].recv_chunk, 7);
@@ -108,7 +106,8 @@ mod tests {
     fn all_chunks_covered() {
         for rank in 0..8u16 {
             let steps = ring_allreduce(8, rank);
-            let rs_recv: std::collections::HashSet<_> = steps.iter()
+            let rs_recv: std::collections::HashSet<_> = steps
+                .iter()
                 .filter(|s| s.phase == Phase::ReduceScatter)
                 .map(|s| s.recv_chunk)
                 .collect();

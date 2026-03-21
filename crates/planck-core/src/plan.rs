@@ -16,10 +16,10 @@ pub enum Opcode {
     Wait,
     LocalCopy,
     LocalReduce,
-    PutWithSignal,   // fused: Put + Signal
-    WaitReduceCopy,  // fused: Wait + Reduce + Copy
-    WaitReducePut,   // fused: Wait + Reduce + Put
-    Noop,            // sync point
+    PutWithSignal,  // fused: Put + Signal
+    WaitReduceCopy, // fused: Wait + Reduce + Copy
+    WaitReducePut,  // fused: Wait + Reduce + Put
+    Noop,           // sync point
 }
 
 #[repr(u8)]
@@ -43,48 +43,48 @@ pub enum BufPool {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct PlanHeader {
-    pub magic:       u32,      // PLAN_MAGIC
-    pub version:     u16,      // PLAN_VERSION
-    pub num_ops:     u16,
+    pub magic: u32,   // PLAN_MAGIC
+    pub version: u16, // PLAN_VERSION
+    pub num_ops: u16,
     pub num_buffers: u16,
     pub num_streams: u8,
-    pub num_events:  u8,
-    pub num_ranks:   u16,
-    pub my_rank:     u16,
-    pub flags:       u32,
-    pub _reserved:   [u8; 12],
+    pub num_events: u8,
+    pub num_ranks: u16,
+    pub my_rank: u16,
+    pub flags: u32,
+    pub _reserved: [u8; 12],
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct BufEntry {
-    pub pool:   u32, // BufPool as u32
+    pub pool: u32, // BufPool as u32
     pub offset: u32,
-    pub size:   u32,
+    pub size: u32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct OpEntry {
-    pub opcode:       u8,
-    pub stream_id:    u8,
-    pub reduce_op:    u8,
-    pub flags:        u8,
-    pub src_buf:      u16, // index into buffers[]
-    pub dst_buf:      u16, // index into buffers[]
-    pub dst_rank:     u16,
-    pub wait_event:   u16, // 0 = no wait
+    pub opcode: u8,
+    pub stream_id: u8,
+    pub reduce_op: u8,
+    pub flags: u8,
+    pub src_buf: u16, // index into buffers[]
+    pub dst_buf: u16, // index into buffers[]
+    pub dst_rank: u16,
+    pub wait_event: u16, // 0 = no wait
     pub signal_event: u16,
-    pub _pad:         u16,
+    pub _pad: u16,
 }
 
 // ==== ExecutionPlan ====
 
 #[derive(Debug, Clone)]
 pub struct ExecutionPlan {
-    pub header:  PlanHeader,
+    pub header: PlanHeader,
     pub buffers: Vec<BufEntry>,
-    pub ops:     Vec<OpEntry>,
+    pub ops: Vec<OpEntry>,
 }
 
 // ==== Constructors ====
@@ -125,16 +125,16 @@ impl OpEntry {
         signal_event: u16,
     ) -> Self {
         Self {
-            opcode:       opcode as u8,
+            opcode: opcode as u8,
             stream_id,
-            reduce_op:    reduce_op as u8,
-            flags:        0,
+            reduce_op: reduce_op as u8,
+            flags: 0,
             src_buf,
             dst_buf,
             dst_rank,
             wait_event,
             signal_event,
-            _pad:         0,
+            _pad: 0,
         }
     }
 }
@@ -186,7 +186,8 @@ impl ExecutionPlan {
 
         let b_size = std::mem::size_of::<BufEntry>();
         let o_size = std::mem::size_of::<OpEntry>();
-        let expected = h_size + header.num_buffers as usize * b_size + header.num_ops as usize * o_size;
+        let expected =
+            h_size + header.num_buffers as usize * b_size + header.num_ops as usize * o_size;
         if data.len() < expected {
             return None;
         }
@@ -219,11 +220,11 @@ pub enum Collective {
 }
 
 pub struct CompileRequest {
-    pub collective:      Collective,
-    pub msg_size:        usize,
-    pub reduce_op:       ReduceOp,
-    pub num_ranks:       usize,
-    pub my_rank:         usize,
+    pub collective: Collective,
+    pub msg_size: usize,
+    pub reduce_op: ReduceOp,
+    pub num_ranks: usize,
+    pub my_rank: usize,
     pub pipeline_chunks: usize,
 }
 
@@ -251,21 +252,18 @@ pub fn fuse(ops: Vec<OpEntry>) -> Vec<OpEntry> {
             // src=reduce_src(scratch), dst=reduce_dst=put_src(input[chunk])
             // _pad=put_dst on remote(scratch), dst_rank=put destination
             // wait_event=Wait source rank (used by DES engine for signal matching)
-            if a == Opcode::Wait as u8
-                && b == Opcode::LocalReduce as u8
-                && c == Opcode::Put as u8
-            {
+            if a == Opcode::Wait as u8 && b == Opcode::LocalReduce as u8 && c == Opcode::Put as u8 {
                 result.push(OpEntry {
-                    opcode:       Opcode::WaitReducePut as u8,
-                    stream_id:    ops[i].stream_id,
-                    reduce_op:    ops[i + 1].reduce_op,
-                    flags:        0,
-                    src_buf:      ops[i + 1].src_buf,
-                    dst_buf:      ops[i + 1].dst_buf,
-                    dst_rank:     ops[i + 2].dst_rank,
-                    wait_event:   ops[i].dst_rank, // Wait source rank
+                    opcode: Opcode::WaitReducePut as u8,
+                    stream_id: ops[i].stream_id,
+                    reduce_op: ops[i + 1].reduce_op,
+                    flags: 0,
+                    src_buf: ops[i + 1].src_buf,
+                    dst_buf: ops[i + 1].dst_buf,
+                    dst_rank: ops[i + 2].dst_rank,
+                    wait_event: ops[i].dst_rank, // Wait source rank
                     signal_event: ops[i + 2].signal_event,
-                    _pad:         ops[i + 2].dst_buf, // put dst buf on remote
+                    _pad: ops[i + 2].dst_buf, // put dst buf on remote
                 });
                 i += 3;
                 continue;
@@ -279,16 +277,16 @@ pub fn fuse(ops: Vec<OpEntry>) -> Vec<OpEntry> {
                 && c == Opcode::LocalCopy as u8
             {
                 result.push(OpEntry {
-                    opcode:       Opcode::WaitReduceCopy as u8,
-                    stream_id:    ops[i].stream_id,
-                    reduce_op:    ops[i + 1].reduce_op,
-                    flags:        0,
-                    src_buf:      ops[i + 1].src_buf,
-                    dst_buf:      ops[i + 2].dst_buf,
-                    dst_rank:     ops[i].dst_rank,
-                    wait_event:   ops[i].wait_event,
+                    opcode: Opcode::WaitReduceCopy as u8,
+                    stream_id: ops[i].stream_id,
+                    reduce_op: ops[i + 1].reduce_op,
+                    flags: 0,
+                    src_buf: ops[i + 1].src_buf,
+                    dst_buf: ops[i + 2].dst_buf,
+                    dst_rank: ops[i].dst_rank,
+                    wait_event: ops[i].wait_event,
                     signal_event: ops[i + 2].signal_event,
-                    _pad:         ops[i + 1].dst_buf, // reduce dst (input[chunk])
+                    _pad: ops[i + 1].dst_buf, // reduce dst (input[chunk])
                 });
                 i += 3;
                 continue;
@@ -302,16 +300,16 @@ pub fn fuse(ops: Vec<OpEntry>) -> Vec<OpEntry> {
             && ops[i + 1].opcode == Opcode::Signal as u8
         {
             result.push(OpEntry {
-                opcode:       Opcode::PutWithSignal as u8,
-                stream_id:    ops[i].stream_id,
-                reduce_op:    ops[i].reduce_op,
-                flags:        0,
-                src_buf:      ops[i].src_buf,
-                dst_buf:      ops[i].dst_buf,
-                dst_rank:     ops[i].dst_rank,
-                wait_event:   ops[i].wait_event,
+                opcode: Opcode::PutWithSignal as u8,
+                stream_id: ops[i].stream_id,
+                reduce_op: ops[i].reduce_op,
+                flags: 0,
+                src_buf: ops[i].src_buf,
+                dst_buf: ops[i].dst_buf,
+                dst_rank: ops[i].dst_rank,
+                wait_event: ops[i].wait_event,
                 signal_event: ops[i + 1].signal_event,
-                _pad:         0,
+                _pad: 0,
             });
             i += 2;
             continue;
@@ -451,11 +449,11 @@ mod tests {
 
         let topo = Topology::hccs_8card();
         let req = CompileRequest {
-            collective:      Collective::AllReduce,
-            msg_size:        256 << 20,
-            reduce_op:       ReduceOp::Sum,
-            num_ranks:       8,
-            my_rank:         0,
+            collective: Collective::AllReduce,
+            msg_size: 256 << 20,
+            reduce_op: ReduceOp::Sum,
+            num_ranks: 8,
+            my_rank: 0,
             pipeline_chunks: 4,
         };
         let plan = compile(&req, &topo);
@@ -495,8 +493,7 @@ mod tests {
     /// Input: rank r has [(r+1) as f32; 64], expect all ranks get [36.0; 64].
     #[test]
     fn simulate_ring_allreduce() {
-        use crate::algo::ring_allreduce;
-        use crate::topo::Topology;
+        use crate::{algo::ring_allreduce, topo::Topology};
 
         let n = 8usize;
         let chunk_len = 8usize; // 8 f32s per sub-chunk, 64 total
@@ -505,11 +502,11 @@ mod tests {
         let topo = Topology::hccs_8card();
         for r in 0..n {
             let req = CompileRequest {
-                collective:      Collective::AllReduce,
-                msg_size:        n * chunk_len * 4, // 256 bytes
-                reduce_op:       ReduceOp::Sum,
-                num_ranks:       n,
-                my_rank:         r,
+                collective: Collective::AllReduce,
+                msg_size: n * chunk_len * 4, // 256 bytes
+                reduce_op: ReduceOp::Sum,
+                num_ranks: n,
+                my_rank: r,
                 pipeline_chunks: 1,
             };
             let plan = compile(&req, &topo);
@@ -518,13 +515,10 @@ mod tests {
         }
 
         // Algorithm-level simulation: rank r, chunk k = [(r+1); chunk_len]
-        let mut data: Vec<Vec<Vec<f32>>> = (0..n)
-            .map(|r| vec![vec![(r + 1) as f32; chunk_len]; n])
-            .collect();
+        let mut data: Vec<Vec<Vec<f32>>> =
+            (0..n).map(|r| vec![vec![(r + 1) as f32; chunk_len]; n]).collect();
 
-        let all_steps: Vec<Vec<_>> = (0..n)
-            .map(|r| ring_allreduce(n as u16, r as u16))
-            .collect();
+        let all_steps: Vec<Vec<_>> = (0..n).map(|r| ring_allreduce(n as u16, r as u16)).collect();
 
         // Execute in lockstep: RS (n-1 steps) + AG (n-1 steps)
         for step_idx in 0..2 * (n - 1) {
@@ -539,7 +533,9 @@ mod tests {
                 let ri = step.recv_chunk as usize;
 
                 if step.needs_reduce {
-                    for i in 0..chunk_len { data[r][ri][i] += sends[from][i]; }
+                    for i in 0..chunk_len {
+                        data[r][ri][i] += sends[from][i];
+                    }
                 } else {
                     data[r][ri] = sends[from].clone();
                 }
@@ -550,8 +546,11 @@ mod tests {
         for r in 0..n {
             for k in 0..n {
                 for i in 0..chunk_len {
-                    assert!((data[r][k][i] - 36.0).abs() < 1e-6,
-                        "rank {r} chunk {k} elem {i}: got {}", data[r][k][i]);
+                    assert!(
+                        (data[r][k][i] - 36.0).abs() < 1e-6,
+                        "rank {r} chunk {k} elem {i}: got {}",
+                        data[r][k][i]
+                    );
                 }
             }
         }
@@ -565,36 +564,44 @@ mod tests {
         use crate::topo::Topology;
 
         let n = 8usize;
-        let chunk_f32 = 8usize;                  // f32s per ring chunk
-        let msg_size = n * chunk_f32 * 4;         // 256 bytes total
-        let nf = msg_size / 4;                    // 64 f32s total
+        let chunk_f32 = 8usize; // f32s per ring chunk
+        let msg_size = n * chunk_f32 * 4; // 256 bytes total
+        let nf = msg_size / 4; // 64 f32s total
 
         let topo = Topology::hccs_8card();
-        let plans: Vec<_> = (0..n).map(|r| compile(&CompileRequest {
-            collective:      Collective::AllReduce,
-            msg_size,
-            reduce_op:       ReduceOp::Sum,
-            num_ranks:       n,
-            my_rank:         r,
-            pipeline_chunks: 1,
-        }, &topo)).collect();
+        let plans: Vec<_> = (0..n)
+            .map(|r| {
+                compile(
+                    &CompileRequest {
+                        collective: Collective::AllReduce,
+                        msg_size,
+                        reduce_op: ReduceOp::Sum,
+                        num_ranks: n,
+                        my_rank: r,
+                        pipeline_chunks: 1,
+                    },
+                    &topo,
+                )
+            })
+            .collect();
 
         // All ranks must have the same op count (symmetric schedule)
-        for p in &plans { assert_eq!(p.ops.len(), plans[0].ops.len()); }
+        for p in &plans {
+            assert_eq!(p.ops.len(), plans[0].ops.len());
+        }
 
         // In-place data: Input == Output. Rank r starts with [r+1; nf].
-        let mut data: Vec<Vec<f32>> = (0..n)
-            .map(|r| vec![(r + 1) as f32; nf])
-            .collect();
+        let mut data: Vec<Vec<f32>> = (0..n).map(|r| vec![(r + 1) as f32; nf]).collect();
 
         // Scratch: size from buffer table
-        let scratch_f32 = plans[0].buffers.iter()
+        let scratch_f32 = plans[0]
+            .buffers
+            .iter()
             .filter(|b| b.pool == BufPool::Scratch as u32)
             .map(|b| ((b.offset + b.size) as usize + 3) / 4)
-            .max().unwrap_or(0);
-        let mut scratch: Vec<Vec<f32>> = (0..n)
-            .map(|_| vec![0.0f32; scratch_f32])
-            .collect();
+            .max()
+            .unwrap_or(0);
+        let mut scratch: Vec<Vec<f32>> = (0..n).map(|_| vec![0.0f32; scratch_f32]).collect();
 
         // Read from a rank's buffer (Input/Output -> data, Scratch -> scratch)
         fn read_buf(data: &[f32], scratch: &[f32], buf: &BufEntry, sz: usize) -> Vec<f32> {
@@ -617,8 +624,10 @@ mod tests {
                 let bufs = &plans[rank].buffers;
                 let oc = op.opcode;
 
-                if oc == Opcode::Noop as u8 || oc == Opcode::Signal as u8
-                    || oc == Opcode::Wait as u8 {
+                if oc == Opcode::Noop as u8
+                    || oc == Opcode::Signal as u8
+                    || oc == Opcode::Wait as u8
+                {
                     continue;
                 }
 
@@ -637,7 +646,9 @@ mod tests {
                     let sz = src.size as usize / 4;
                     let so = src.offset as usize / 4;
                     let do_ = dst.offset as usize / 4;
-                    for j in 0..sz { data[rank][do_ + j] += scratch[rank][so + j]; }
+                    for j in 0..sz {
+                        data[rank][do_ + j] += scratch[rank][so + j];
+                    }
                     continue;
                 }
 
@@ -647,7 +658,9 @@ mod tests {
                     let sz = src.size as usize / 4;
                     let so = src.offset as usize / 4;
                     let do_ = dst.offset as usize / 4;
-                    for j in 0..sz { data[rank][do_ + j] = scratch[rank][so + j]; }
+                    for j in 0..sz {
+                        data[rank][do_ + j] = scratch[rank][so + j];
+                    }
                     continue;
                 }
 
@@ -658,7 +671,9 @@ mod tests {
                     let sz = src.size as usize / 4;
                     let so = src.offset as usize / 4;
                     let do_ = dst.offset as usize / 4;
-                    for j in 0..sz { data[rank][do_ + j] += scratch[rank][so + j]; }
+                    for j in 0..sz {
+                        data[rank][do_ + j] += scratch[rank][so + j];
+                    }
                     // 2. Put: data[dst_buf] -> scratch[dst_rank][_pad buf]
                     let put_dst = &bufs[op._pad as usize];
                     let vals = data[rank][do_..do_ + sz].to_vec();
@@ -673,11 +688,15 @@ mod tests {
                     let sz = src.size as usize / 4;
                     let so = src.offset as usize / 4;
                     let rdo = red_dst.offset as usize / 4;
-                    for j in 0..sz { data[rank][rdo + j] += scratch[rank][so + j]; }
+                    for j in 0..sz {
+                        data[rank][rdo + j] += scratch[rank][so + j];
+                    }
                     // 2. Copy: data[_pad] -> data[dst_buf]
                     let cpy_dst = &bufs[op.dst_buf as usize];
                     let cdo = cpy_dst.offset as usize / 4;
-                    for j in 0..sz { data[rank][cdo + j] = data[rank][rdo + j]; }
+                    for j in 0..sz {
+                        data[rank][cdo + j] = data[rank][rdo + j];
+                    }
                     continue;
                 }
 
@@ -695,8 +714,13 @@ mod tests {
         // Verify: all ranks should have [36.0; nf] (sum 1+2+...+8 = 36)
         for rank in 0..n {
             for i in 0..nf {
-                assert!((data[rank][i] - 36.0).abs() < 1e-4,
-                    "rank {} elem {}: got {}, expected 36.0", rank, i, data[rank][i]);
+                assert!(
+                    (data[rank][i] - 36.0).abs() < 1e-4,
+                    "rank {} elem {}: got {}, expected 36.0",
+                    rank,
+                    i,
+                    data[rank][i]
+                );
             }
         }
     }

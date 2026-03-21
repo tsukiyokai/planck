@@ -1,8 +1,8 @@
-pub mod plan;
-pub mod topo;
-pub mod cost;
 pub mod algo;
+pub mod cost;
+pub mod plan;
 pub mod sched;
-pub mod template;
 #[cfg(feature = "sim")]
 pub mod sim;
+pub mod template;
+pub mod topo;

@@ -3,17 +3,13 @@
 // Exposes Plan Compiler to Python for torchair graph pass integration.
 // PlanCache is the primary bridge: Rust compile -> PyO3 -> Python -> C++ custom ops.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-use pyo3::prelude::*;
-use pyo3::types::PyBytes;
-
-use planck_core::plan::{
-    Collective, CompileRequest, ExecutionPlan, ReduceOp,
+use planck_core::{
+    plan::{Collective, CompileRequest, ExecutionPlan, ReduceOp},
+    template::PlanTemplate,
+    topo::Topology,
 };
-use planck_core::template::PlanTemplate;
-use planck_core::topo::Topology;
+use pyo3::{prelude::*, types::PyBytes};
+use std::{collections::HashMap, sync::Mutex};
 
 // ==== PyPlanView ====
 
@@ -91,9 +87,10 @@ fn parse_reduce_op(s: &str) -> PyResult<ReduceOp> {
         "sum" => Ok(ReduceOp::Sum),
         "max" => Ok(ReduceOp::Max),
         "min" => Ok(ReduceOp::Min),
-        _ => Err(pyo3::exceptions::PyValueError::new_err(
-            format!("unknown reduce_op '{}', expected sum/max/min", s),
-        )),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown reduce_op '{}', expected sum/max/min",
+            s
+        ))),
     }
 }
 
@@ -105,9 +102,7 @@ struct PlanCompiler {
 #[pymethods]
 impl PlanCompiler {
     #[staticmethod]
-    fn hccs_8card() -> Self {
-        Self { topo: Topology::hccs_8card() }
-    }
+    fn hccs_8card() -> Self { Self { topo: Topology::hccs_8card() } }
 
     #[pyo3(signature = (msg_size, my_rank, reduce_op="sum", pipeline_chunks=1))]
     fn compile_allreduce(
@@ -164,9 +159,7 @@ impl PlanCompiler {
                 topo,
             )
         });
-        Ok(PyPlanTemplate {
-            inner: PlanTemplate::from_plan(plan, base_msg_size),
-        })
+        Ok(PyPlanTemplate { inner: PlanTemplate::from_plan(plan, base_msg_size) })
     }
 }
 
@@ -175,26 +168,19 @@ impl PlanCompiler {
 #[pyclass]
 struct PlanCache {
     compiler: PlanCompiler,
-    cache:    Mutex<HashMap<(usize, usize), ExecutionPlan>>,
+    cache: Mutex<HashMap<(usize, usize), ExecutionPlan>>,
 }
 
 // ExecutionPlan needs Clone for cache retrieval
 fn clone_plan(p: &ExecutionPlan) -> ExecutionPlan {
-    ExecutionPlan {
-        header:  p.header,
-        buffers: p.buffers.clone(),
-        ops:     p.ops.clone(),
-    }
+    ExecutionPlan { header: p.header, buffers: p.buffers.clone(), ops: p.ops.clone() }
 }
 
 #[pymethods]
 impl PlanCache {
     #[staticmethod]
     fn hccs_8card() -> Self {
-        Self {
-            compiler: PlanCompiler::hccs_8card(),
-            cache:    Mutex::new(HashMap::new()),
-        }
+        Self { compiler: PlanCompiler::hccs_8card(), cache: Mutex::new(HashMap::new()) }
     }
 
     #[pyo3(signature = (msg_size, my_rank, reduce_op="sum", pipeline_chunks=1))]
@@ -217,22 +203,17 @@ impl PlanCache {
         }
 
         // Slow path: compile (GIL released) then cache
-        let view = self.compiler.compile_allreduce(
-            py, msg_size, my_rank, reduce_op, pipeline_chunks,
-        )?;
+        let view =
+            self.compiler.compile_allreduce(py, msg_size, my_rank, reduce_op, pipeline_chunks)?;
 
         let mut cache = self.cache.lock().unwrap();
         cache.insert(key, clone_plan(&view.plan));
         Ok(view)
     }
 
-    fn cache_size(&self) -> usize {
-        self.cache.lock().unwrap().len()
-    }
+    fn cache_size(&self) -> usize { self.cache.lock().unwrap().len() }
 
-    fn clear(&self) {
-        self.cache.lock().unwrap().clear();
-    }
+    fn clear(&self) { self.cache.lock().unwrap().clear(); }
 }
 
 // ==== Simulation ====
@@ -247,8 +228,7 @@ fn simulate(
     use planck_core::sim;
 
     let cfg = match config_toml {
-        Some(s) => sim::SimConfig::from_toml(s)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?,
+        Some(s) => sim::SimConfig::from_toml(s).map_err(pyo3::exceptions::PyValueError::new_err)?,
         None => sim::SimConfig::default(),
     };
 

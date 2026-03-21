@@ -5,14 +5,16 @@
 // - Buffer allocation (input/output/scratch for each pipeline chunk)
 // - Double-buffered receive for latency hiding
 
-use crate::algo::{AlgoStep, Phase};
-use crate::plan::{BufEntry, BufPool, OpEntry, Opcode, ReduceOp};
+use crate::{
+    algo::{AlgoStep, Phase},
+    plan::{BufEntry, BufPool, OpEntry, Opcode, ReduceOp},
+};
 
 // ==== Types ====
 
 pub struct ScheduleResult {
-    pub ops:         Vec<OpEntry>,
-    pub buffers:     Vec<BufEntry>,
+    pub ops: Vec<OpEntry>,
+    pub buffers: Vec<BufEntry>,
     pub num_streams: u8,
 }
 
@@ -49,9 +51,9 @@ pub fn schedule(steps: &[AlgoStep], msg_size: usize, pipeline_chunks: usize) -> 
         let input_base = buffers.len() as u16;
         for j in 0..num_ranks {
             buffers.push(BufEntry {
-                pool:   BufPool::Input as u32,
+                pool: BufPool::Input as u32,
                 offset: (pipe_offset + j * ring_piece) as u32,
-                size:   ring_piece as u32,
+                size: ring_piece as u32,
             });
         }
 
@@ -59,24 +61,24 @@ pub fn schedule(steps: &[AlgoStep], msg_size: usize, pipeline_chunks: usize) -> 
         let output_base = buffers.len() as u16;
         for j in 0..num_ranks {
             buffers.push(BufEntry {
-                pool:   BufPool::Output as u32,
+                pool: BufPool::Output as u32,
                 offset: (pipe_offset + j * ring_piece) as u32,
-                size:   ring_piece as u32,
+                size: ring_piece as u32,
             });
         }
 
         // -- Scratch: double-buffered receive --
         let scratch_a = buffers.len() as u16;
         buffers.push(BufEntry {
-            pool:   BufPool::Scratch as u32,
+            pool: BufPool::Scratch as u32,
             offset: (c * 2 * ring_piece) as u32,
-            size:   ring_piece as u32,
+            size: ring_piece as u32,
         });
         let scratch_b = buffers.len() as u16;
         buffers.push(BufEntry {
-            pool:   BufPool::Scratch as u32,
+            pool: BufPool::Scratch as u32,
             offset: ((c * 2 + 1) * ring_piece) as u32,
-            size:   ring_piece as u32,
+            size: ring_piece as u32,
         });
 
         // -- Generate ops for each algorithm step --
@@ -87,68 +89,96 @@ pub fn schedule(steps: &[AlgoStep], msg_size: usize, pipeline_chunks: usize) -> 
                 Phase::ReduceScatter => {
                     // Put: send ring chunk[send_chunk] to dst_rank's scratch
                     ops.push(OpEntry::new(
-                        Opcode::Put, stream,
+                        Opcode::Put,
+                        stream,
                         input_base + step.send_chunk,
                         recv_buf,
                         step.dst_rank,
-                        ReduceOp::Sum, 0, 0,
+                        ReduceOp::Sum,
+                        0,
+                        0,
                     ));
                     ops.push(OpEntry::new(
-                        Opcode::Signal, stream,
-                        0, 0, step.dst_rank,
-                        ReduceOp::Sum, 0, 0,
+                        Opcode::Signal,
+                        stream,
+                        0,
+                        0,
+                        step.dst_rank,
+                        ReduceOp::Sum,
+                        0,
+                        0,
                     ));
                     ops.push(OpEntry::new(
-                        Opcode::Wait, stream,
-                        0, 0, step.src_rank,
-                        ReduceOp::Sum, 0, 0,
+                        Opcode::Wait,
+                        stream,
+                        0,
+                        0,
+                        step.src_rank,
+                        ReduceOp::Sum,
+                        0,
+                        0,
                     ));
                     // LocalReduce: scratch -> input[recv_chunk] (accumulate)
                     ops.push(OpEntry::new(
-                        Opcode::LocalReduce, stream,
+                        Opcode::LocalReduce,
+                        stream,
                         recv_buf,
                         input_base + step.recv_chunk,
                         0,
-                        ReduceOp::Sum, 0, 0,
+                        ReduceOp::Sum,
+                        0,
+                        0,
                     ));
                 }
                 Phase::AllGather => {
                     // Put: send reduced chunk[send_chunk] to dst_rank's scratch
                     ops.push(OpEntry::new(
-                        Opcode::Put, stream,
+                        Opcode::Put,
+                        stream,
                         input_base + step.send_chunk,
                         recv_buf,
                         step.dst_rank,
-                        ReduceOp::Sum, 0, 0,
+                        ReduceOp::Sum,
+                        0,
+                        0,
                     ));
                     ops.push(OpEntry::new(
-                        Opcode::Signal, stream,
-                        0, 0, step.dst_rank,
-                        ReduceOp::Sum, 0, 0,
+                        Opcode::Signal,
+                        stream,
+                        0,
+                        0,
+                        step.dst_rank,
+                        ReduceOp::Sum,
+                        0,
+                        0,
                     ));
                     ops.push(OpEntry::new(
-                        Opcode::Wait, stream,
-                        0, 0, step.src_rank,
-                        ReduceOp::Sum, 0, 0,
+                        Opcode::Wait,
+                        stream,
+                        0,
+                        0,
+                        step.src_rank,
+                        ReduceOp::Sum,
+                        0,
+                        0,
                     ));
                     // LocalCopy: scratch -> output[recv_chunk]
                     ops.push(OpEntry::new(
-                        Opcode::LocalCopy, stream,
+                        Opcode::LocalCopy,
+                        stream,
                         recv_buf,
                         output_base + step.recv_chunk,
                         0,
-                        ReduceOp::Sum, 0, 0,
+                        ReduceOp::Sum,
+                        0,
+                        0,
                     ));
                 }
             }
         }
     }
 
-    ScheduleResult {
-        ops,
-        buffers,
-        num_streams: pipeline_chunks as u8,
-    }
+    ScheduleResult { ops, buffers, num_streams: pipeline_chunks as u8 }
 }
 
 // ==== Tests ====
@@ -184,9 +214,8 @@ mod tests {
         let chunk_size = msg_size / chunks;
         let ring_piece = chunk_size / 8;
 
-        let scratch_bufs: Vec<_> = sched.buffers.iter()
-            .filter(|b| b.pool == BufPool::Scratch as u32)
-            .collect();
+        let scratch_bufs: Vec<_> =
+            sched.buffers.iter().filter(|b| b.pool == BufPool::Scratch as u32).collect();
         // 2 scratch buffers per pipeline chunk = 4*2 = 8
         assert!(scratch_bufs.len() >= chunks * 2);
         for b in &scratch_bufs {
@@ -200,9 +229,7 @@ mod tests {
         let sched = schedule(&steps, 8192, 1); // 1 pipeline chunk
 
         // 14 ring steps * 4 ops/step = 56 ops on stream 0
-        let stream0_ops: Vec<_> = sched.ops.iter()
-            .filter(|op| op.stream_id == 0)
-            .collect();
+        let stream0_ops: Vec<_> = sched.ops.iter().filter(|op| op.stream_id == 0).collect();
         assert_eq!(stream0_ops.len(), 56);
     }
 }

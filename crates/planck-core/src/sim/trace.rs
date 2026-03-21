@@ -6,32 +6,39 @@
 use std::fmt::Write;
 
 pub struct TraceEvent {
-    pub name:     String,
-    pub ph:       char,       // 'X'=complete
-    pub pid:      u16,        // rank
-    pub tid:      u8,         // stream
-    pub ts:       f64,        // microseconds
-    pub dur:      f64,        // microseconds
+    pub name: String,
+    pub ph: char, // 'X'=complete
+    pub pid: u16, // rank
+    pub tid: u8,  // stream
+    pub ts: f64,  // microseconds
+    pub dur: f64, // microseconds
     pub dst_rank: Option<u16>,
 }
 
 pub struct Trace {
-    pub events:    Vec<TraceEvent>,
+    pub events: Vec<TraceEvent>,
     pub num_ranks: usize,
 }
 
 impl Trace {
-    pub fn new(num_ranks: usize) -> Self {
-        Self { events: Vec::new(), num_ranks }
-    }
+    pub fn new(num_ranks: usize) -> Self { Self { events: Vec::new(), num_ranks } }
 
-    pub fn push(&mut self, rank: usize, stream: u8, name: &str, ts: f64, dur: f64, dst: Option<u16>) {
+    pub fn push(
+        &mut self,
+        rank: usize,
+        stream: u8,
+        name: &str,
+        ts: f64,
+        dur: f64,
+        dst: Option<u16>,
+    ) {
         self.events.push(TraceEvent {
             name: name.to_string(),
             ph: 'X',
             pid: rank as u16,
             tid: stream,
-            ts, dur,
+            ts,
+            dur,
             dst_rank: dst,
         });
     }
@@ -42,20 +49,30 @@ impl Trace {
 
         // Metadata: rank names
         for r in 0..self.num_ranks {
-            write!(s, "{{\"ph\":\"M\",\"pid\":{r},\"name\":\"process_name\",\
-                        \"args\":{{\"name\":\"Rank {r}\"}}}},\n").ok();
+            write!(
+                s,
+                "{{\"ph\":\"M\",\"pid\":{r},\"name\":\"process_name\",\
+                        \"args\":{{\"name\":\"Rank {r}\"}}}},\n"
+            )
+            .ok();
         }
 
         // Events
         for (i, ev) in self.events.iter().enumerate() {
-            write!(s, "{{\"name\":\"{}\",\"cat\":\"planck\",\"ph\":\"{}\",\
+            write!(
+                s,
+                "{{\"name\":\"{}\",\"cat\":\"planck\",\"ph\":\"{}\",\
                         \"pid\":{},\"tid\":{},\"ts\":{:.3},\"dur\":{:.3}",
-                ev.name, ev.ph, ev.pid, ev.tid, ev.ts, ev.dur).ok();
+                ev.name, ev.ph, ev.pid, ev.tid, ev.ts, ev.dur
+            )
+            .ok();
             if let Some(dst) = ev.dst_rank {
                 write!(s, ",\"args\":{{\"dst_rank\":{dst}}}").ok();
             }
             s.push('}');
-            if i + 1 < self.events.len() { s.push(','); }
+            if i + 1 < self.events.len() {
+                s.push(',');
+            }
             s.push('\n');
         }
 

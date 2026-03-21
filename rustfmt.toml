@@ -1,0 +1,6 @@
+# Compact style (cargo +nightly fmt)
+max_width            = 100
+use_small_heuristics = "Max"
+fn_single_line       = true     # fn foo() { x } 不拆行
+imports_granularity  = "Crate"  # 合并同crate导入
+group_imports        = "One"    # 所有use合为一组

@@ -6,14 +6,12 @@
 use crate::topo::Link;
 
 pub struct LinkState {
-    pub link:         Link,
+    pub link: Link,
     pub active_flows: u32,
 }
 
 impl LinkState {
-    pub fn new(link: Link) -> Self {
-        Self { link, active_flows: 0 }
-    }
+    pub fn new(link: Link) -> Self { Self { link, active_flows: 0 } }
 
     /// Per-flow bandwidth under fair sharing (GB/s).
     pub fn effective_bw_gbps(&self) -> f64 {
@@ -24,7 +22,7 @@ impl LinkState {
         }
     }
 
-    pub fn add_flow(&mut self)    { self.active_flows += 1; }
+    pub fn add_flow(&mut self) { self.active_flows += 1; }
     pub fn remove_flow(&mut self) { self.active_flows = self.active_flows.saturating_sub(1); }
 }
 
@@ -36,7 +34,13 @@ mod tests {
     use crate::topo::TransportType;
 
     fn test_link() -> Link {
-        Link { src: 0, dst: 1, bandwidth_gbps: 30.0, latency_us: 1.5, transport: TransportType::Hccs }
+        Link {
+            src: 0,
+            dst: 1,
+            bandwidth_gbps: 30.0,
+            latency_us: 1.5,
+            transport: TransportType::Hccs,
+        }
     }
 
     #[test]
