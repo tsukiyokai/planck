@@ -1,7 +1,7 @@
 # Planck v0.1 Phase A -- Implementation Summary
 
-> Date: 2026-03-20
-> Scope: Chunks 1-5 (Rust Plan Compiler + PyO3 Bindings)
+> Date: 2026-03-20 (updated 2026-03-22)
+> Scope: Chunks 1-5 (Rust Plan Compiler + DES Simulator + PyO3 Bindings)
 > Environment: macOS arm64, Rust 1.94.0, CPython 3.13, PyO3 0.22
 
 ---
@@ -18,16 +18,16 @@ Key numbers:
 
 | Metric                    | Target   | Achieved       | Headroom |
 |:--------------------------|:---------|:---------------|:---------|
-| Compile (256MB, 4 chunk)  | < 1 ms   | 1.36 us        | 737x     |
-| Compile (16KB, 1 chunk)   | < 1 ms   | 581 ns         | 1720x    |
-| Compile (1MB, 2 chunk)    | < 1 ms   | 871 ns         | 1148x    |
-| Template instantiate      | < 1 us   | 73 ns          | 14x      |
-| Rust tests                | all pass | 29/29 pass     | --       |
-| Python tests              | all pass | 4/4 pass       | --       |
-| Total source lines        | --       | 1,688          | --       |
+| Compile (256MB, 4 chunk)  | < 1 ms   | 1.42 us        | 704x     |
+| Compile (16KB, 1 chunk)   | < 1 ms   | 584 ns         | 1712x    |
+| Compile (1MB, 2 chunk)    | < 1 ms   | 877 ns         | 1140x    |
+| Template instantiate      | < 1 us   | 74 ns          | 14x      |
+| Rust tests                | all pass | 44/44 pass     | --       |
+| Python tests              | all pass | 7/7 pass       | --       |
+| Total source lines        | --       | 2,577          | --       |
 
 The compiler is fast enough for per-request JIT plan generation in inference scenarios
-(73ns instantiation fits within any realistic dispatch overhead).
+(74ns instantiation fits within any realistic dispatch overhead).
 
 ---
 
@@ -36,29 +36,38 @@ The compiler is fast enough for per-request JIT plan generation in inference sce
 ### 2.1 Module Breakdown
 
 ```
-crates/planck-core/src/           1,317 lines   29 tests
-  plan.rs        682 lines   12 tests   IR types + compile() + fuse() + simulation
+crates/planck-core/src/           1,340 lines   29 tests
+  plan.rs        703 lines   12 tests   IR types + compile() + fuse() + simulation
   sched.rs       208 lines    4 tests   pipeline scheduler, double-buffered recv
   template.rs    123 lines    3 tests   parameterized plan templates
   algo.rs        119 lines    4 tests   Ring AllReduce decomposition (RS+AG)
   topo.rs        105 lines    3 tests   8-card HCCS topology (56 directed links)
   cost.rs         74 lines    3 tests   alpha-beta-gamma cost model
-  lib.rs           6 lines    0 tests   module re-exports
+  lib.rs           8 lines    0 tests   module re-exports
+
+crates/planck-core/src/sim/        805 lines   15 tests
+  engine.rs      274 lines    1 test    DES engine (BinaryHeap min-heap, per-rank streams)
+  config.rs      164 lines    3 tests   TOML-driven config (timing model, link overrides)
+  timing.rs      129 lines    3 tests   pluggable models (SimpleModel / AscendModel)
+  trace.rs        95 lines    2 tests   Chrome Trace JSON output (perfetto-compatible)
+  mod.rs          86 lines    4 tests   integration tests (monotonic, pipeline, deadlock)
+  link.rs         57 lines    2 tests   link contention model (fair-share bandwidth)
 
 crates/planck-python/src/
-  lib.rs         248 lines              PyO3 bindings (4 classes)
+  lib.rs         273 lines              PyO3 bindings (4 classes + simulate())
 
 crates/planck-core/benches/
   compile_bench.rs  50 lines            criterion benchmarks (4 cases)
 
 python/planck/
-  __init__.py     18 lines              re-exports PlanCompiler/PlanCache/etc.
+  __init__.py     20 lines              re-exports PlanCompiler/PlanCache/simulate/etc.
 
 tests/
   test_plan_compile.py  55 lines        4 pytest tests
+  test_sim.py           34 lines        3 pytest tests (sim via Python)
 ```
 
-Total: 1,688 lines of source code (excluding config/TOML).
+Total: 2,577 lines of source code (excluding config/TOML).
 
 ### 2.2 Compilation Pipeline
 
@@ -122,73 +131,152 @@ Three-layer IR, all repr(C) for zero-copy FFI to C++:
 GIL released during compilation via `py.allow_threads()`.
 Cache backed by `HashMap<(msg_size, my_rank), ExecutionPlan>`.
 
+### 2.5 DES Simulation System (planck-sim)
+
+An embedded discrete-event simulator for verifying plan schedules without hardware.
+Not a general CCL simulator -- a compiler feedback tool that answers "is this schedule
+good?" not "how fast on real hardware?"
+
+Architecture:
+
+```
+SimConfig (TOML)    ExecutionPlan[] (all ranks)    Topology
+     |                      |                         |
+     v                      v                         v
+  TimingModel ---------> Simulator <------------ LinkState[]
+  (pluggable)          (BinaryHeap)              (contention)
+                            |
+                            v
+                    Trace (Chrome JSON)
+```
+
+6 modules, 805 lines:
+
+| Module    | Role                                                          |
+|:----------|:--------------------------------------------------------------|
+| engine.rs | DES core: event queue (min-heap), per-rank stream PC, signal/wait tracking |
+| config.rs | TOML config parser: timing model selection, link parameter overrides       |
+| timing.rs | TimingModel trait + SimpleModel (alpha-beta) + AscendModel (3-round notify, InlineReduce overlap) |
+| trace.rs  | Chrome Trace JSON emitter (perfetto-compatible), total_time extraction    |
+| link.rs   | Link contention: fair-share bandwidth when multiple flows share a link    |
+| mod.rs    | Public API: `simulate(plans, topo, config) -> Trace` + integration tests  |
+
+Key design decisions:
+
+1. Time-only simulation: no data movement, only timing. The algorithm-level sim in
+   plan.rs handles data correctness; planck-sim handles schedule quality.
+
+2. Pluggable timing models via `TimingModel` trait:
+   - SimpleModel: `T = latency + size/bandwidth` (one line per method, for sweeps)
+   - AscendModel: hardware-aware (3-round HCCS notify protocol, GET mode latency,
+     InlineReduce overlap where reduce and put execute in parallel on MTE+AIV)
+
+3. Link contention: when N flows share a link simultaneously, each gets bandwidth/N.
+   This catches schedules that accidentally overload a single HCCS link.
+
+4. Chrome Trace output: `{"traceEvents": [...]}` format, directly viewable in
+   `chrome://tracing` or Perfetto UI. Each op becomes a duration event with
+   pid=rank, tid=stream.
+
 ---
 
 ## 3. Test Results
 
-### 3.1 Rust Tests (29/29 pass)
+### 3.1 Rust Tests (44/44 pass)
 
 ```
-cargo test -p planck-core
-  plan::tests::header_is_32_bytes          ok
-  plan::tests::buf_entry_is_12_bytes       ok
-  plan::tests::op_entry_is_16_bytes        ok
-  plan::tests::header_magic                ok
-  plan::tests::opcode_values               ok
-  plan::tests::serialize_roundtrip         ok
-  plan::tests::fusion_put_signal           ok
-  plan::tests::fusion_wait_reduce_put      ok
-  plan::tests::fusion_preserves_unfusable  ok
-  plan::tests::compile_produces_valid_plan ok
-  plan::tests::simulate_ring_allreduce     ok     (algorithm-level 8-rank sim)
-  plan::tests::simulate_plan_execution     ok     (OpEntry-level 8-rank sim)
-  topo::tests::hccs_8card_basics           ok
-  topo::tests::hccs_8card_ring_neighbors   ok
-  topo::tests::link_properties             ok
-  cost::tests::cost_from_topology          ok
-  cost::tests::ring_allreduce_cost_scales  ok
-  cost::tests::ring_cost_formula           ok
-  algo::tests::ring_allreduce_step_count   ok
-  algo::tests::ring_send_recv_ranks        ok
-  algo::tests::ring_rs_chunk_indices       ok
-  algo::tests::all_chunks_covered          ok
-  sched::tests::schedule_produces_ops      ok
-  sched::tests::schedule_uses_c_streams    ok
-  sched::tests::schedule_buffer_sizes      ok
-  sched::tests::schedule_op_sequence       ok
-  template::tests::template_creation       ok
-  template::tests::template_instantiation  ok
-  template::tests::instantiation_is_fast   ok
+cargo test -p planck-core --features sim
 
-  29 passed; 0 failed; finished in 0.00s
+  -- Core modules (29) --
+  plan::tests::header_is_32_bytes              ok
+  plan::tests::buf_entry_is_12_bytes           ok
+  plan::tests::op_entry_is_16_bytes            ok
+  plan::tests::header_magic                    ok
+  plan::tests::opcode_values                   ok
+  plan::tests::serialize_roundtrip             ok
+  plan::tests::fusion_put_signal               ok
+  plan::tests::fusion_wait_reduce_put          ok
+  plan::tests::fusion_preserves_unfusable      ok
+  plan::tests::compile_produces_valid_plan     ok
+  plan::tests::simulate_ring_allreduce         ok   (algorithm-level 8-rank sim)
+  plan::tests::simulate_plan_execution         ok   (OpEntry-level 8-rank sim)
+  topo::tests::hccs_8card_basics               ok
+  topo::tests::hccs_8card_ring_neighbors       ok
+  topo::tests::link_properties                 ok
+  cost::tests::cost_from_topology              ok
+  cost::tests::ring_allreduce_cost_scales_with_size  ok
+  cost::tests::ring_cost_formula               ok
+  algo::tests::ring_allreduce_step_count       ok
+  algo::tests::ring_send_recv_ranks            ok
+  algo::tests::ring_rs_chunk_indices           ok
+  algo::tests::all_chunks_covered              ok
+  sched::tests::schedule_produces_ops          ok
+  sched::tests::schedule_uses_c_streams        ok
+  sched::tests::schedule_buffer_sizes          ok
+  sched::tests::schedule_op_sequence_per_stream  ok
+  template::tests::template_creation           ok
+  template::tests::template_instantiation      ok
+  template::tests::instantiation_is_fast       ok
+
+  -- Simulation modules (15) --
+  sim::config::tests::sim_default_config       ok   (default values sane)
+  sim::config::tests::sim_parse_size_str       ok   ("256KB" -> 262144)
+  sim::config::tests::sim_toml_parse           ok   (full TOML roundtrip)
+  sim::engine::tests::sim_event_ordering       ok   (min-heap time ordering)
+  sim::link::tests::sim_link_no_contention     ok   (single flow = full BW)
+  sim::link::tests::sim_link_fair_share        ok   (N flows = BW/N each)
+  sim::timing::tests::sim_simple_put_time      ok   (alpha-beta formula)
+  sim::timing::tests::sim_ascend_notify_3_rounds  ok   (3x latency for notify)
+  sim::timing::tests::sim_ascend_inline_reduce_overlaps  ok   (reduce||put)
+  sim::trace::tests::sim_trace_json_valid      ok   (Chrome Trace parseable)
+  sim::trace::tests::sim_trace_total_time      ok   (max end - min start)
+  sim::tests::sim_trace_has_events             ok   (integration: events > 0)
+  sim::tests::sim_monotonic_with_size          ok   (larger msg = more time)
+  sim::tests::sim_pipeline_overlap             ok   (4-chunk < 1-chunk)
+  sim::tests::sim_completes_without_deadlock   ok   (all 8 ranks complete)
+
+  44 passed; 0 failed; finished in 0.00s
 ```
 
-### 3.2 Python Tests (4/4 pass)
+### 3.2 Python Tests (7/7 pass)
 
 ```
-pytest tests/test_plan_compile.py -v
+pytest tests/ -v
+
+  -- test_plan_compile.py (4) --
   test_import                  PASSED   planck.__version__ exists
   test_compile_allreduce       PASSED   256MB plan: num_ranks=8, num_ops>0
   test_plan_cache              PASSED   second call hits cache
   test_template_instantiate    PASSED   same ops, different buffer sizes
 
-  4 passed in 0.01s
+  -- test_sim.py (3) --
+  test_simulate_returns_json   PASSED   simulate() -> valid Chrome Trace JSON
+  test_simulate_with_config    PASSED   custom TOML config accepted
+  test_pipeline_more_events    PASSED   4-chunk produces more trace events
+
+  7 passed in 0.02s
 ```
 
 ### 3.3 E2E Simulation
 
-Two simulation tests validate the entire compiler pipeline:
+Three levels of simulation validate the compiler pipeline:
 
-1. `simulate_ring_allreduce`: algorithm-level simulation
+1. `simulate_ring_allreduce` (plan.rs): algorithm-level
    - 8 ranks, each starts with `[(rank+1) as f32; 64]`
    - Expected result: `[36.0; 64]` (sum of 1..8 = 36)
    - Validates: algo.rs chunk index formulas + ring topology correctness
 
-2. `simulate_plan_execution`: instruction-level simulation
+2. `simulate_plan_execution` (plan.rs): instruction-level
    - Compiles ExecutionPlan for all 8 ranks
    - Interprets fused OpEntry instructions (PutWithSignal, WaitReducePut)
    - Two-phase lockstep: local ops first, then remote puts (prevents data races)
    - Validates: the complete pipeline algo -> sched -> fuse -> execution
+
+3. `planck-sim` DES (sim/): timing-level
+   - Compiles plans for all 8 ranks, feeds to DES engine
+   - Verifies: pipeline overlap (4-chunk < 1-chunk), monotonic scaling,
+     no deadlock (all ranks complete), link contention effects
+   - Output: Chrome Trace JSON for visual inspection in Perfetto UI
 
 ---
 
@@ -197,10 +285,10 @@ Two simulation tests validate the entire compiler pipeline:
 ### 4.1 Criterion Results (macOS arm64, M-series, release profile)
 
 ```
-compile/ring_allreduce/256MB_4chunk   1.3551 us   1.3562 us   1.3573 us
-compile/ring_allreduce/16KB_1chunk    581.07 ns   581.38 ns   581.72 ns
-compile/ring_allreduce/1MB_2chunk     867.55 ns   870.74 ns   873.63 ns
-instantiate_16kb                       73.168 ns   73.273 ns   73.402 ns
+compile/ring_allreduce/256MB_4chunk   1.4219 us   (mean, 100 iterations)
+compile/ring_allreduce/16KB_1chunk    584.16 ns
+compile/ring_allreduce/1MB_2chunk     876.98 ns
+instantiate_16kb                       73.75 ns
 ```
 
 ### 4.2 Analysis
@@ -210,20 +298,20 @@ not by algorithm selection or fusion. The near-constant time across 16KB--256MB 
 that msg_size only affects buffer size arithmetic, not instruction count (which depends
 only on num_ranks and pipeline_chunks).
 
-The 4-chunk case (1.36us) is ~2.3x the 1-chunk case (581ns), confirming linear scaling
+The 4-chunk case (1.42us) is ~2.4x the 1-chunk case (584ns), confirming linear scaling
 with pipeline depth. This is expected: 4 chunks generate 4x the ops, but the per-op
 cost is constant.
 
-Template instantiation (73ns) is buffer-table-only work -- iterate BufExpr array,
+Template instantiation (74ns) is buffer-table-only work -- iterate BufExpr array,
 multiply by scale factor, done. No instruction regeneration.
 
 ### 4.3 Implications for Production
 
 | Scenario                          | Budget      | Planck Cost | Fits? |
 |:----------------------------------|:------------|:------------|:------|
-| Training: compile once, run 1M+   | seconds ok  | 1.36 us     | yes   |
-| Inference: per-batch template JIT | < 10 us     | 73 ns       | yes   |
-| Online re-plan (topo change)      | < 1 ms      | 1.36 us     | yes   |
+| Training: compile once, run 1M+   | seconds ok  | 1.42 us     | yes   |
+| Inference: per-batch template JIT | < 10 us     | 74 ns       | yes   |
+| Online re-plan (topo change)      | < 1 ms      | 1.42 us     | yes   |
 
 ---
 
@@ -324,10 +412,29 @@ a single template covers all sizes.
 
 ### 6.4 Compilation is Not the Bottleneck
 
-At 1.36us for the most complex configuration, the compiler itself will never be on
+At 1.42us for the most complex configuration, the compiler itself will never be on
 the critical path. The bottleneck in production will be C++ execution and transport.
 This means Phase B should focus engineering effort on transport optimization, not
 compiler performance.
+
+### 6.5 DES Simulator as Compiler Feedback Loop
+
+The planck-sim module validates a key design hypothesis: an embedded simulator can
+serve as an automated quality gate for plan schedules. Three findings:
+
+1. Pipeline overlap is quantifiable without hardware: the sim confirms 4-chunk
+   pipeline is faster than 1-chunk for the same total message size, validating
+   the scheduler's chunk decomposition logic.
+
+2. AscendModel vs SimpleModel reveals non-obvious effects: the 3-round HCCS
+   notify protocol (3x base latency) and InlineReduce overlap (reduce||put on
+   MTE+AIV) change the optimal pipeline depth. A sim-guided search could auto-tune
+   pipeline_chunks without hardware access.
+
+3. Link contention detection works: the fair-share bandwidth model catches
+   schedules that accidentally route multiple flows through the same HCCS link.
+   This is a static analysis that doesn't require timing simulation, but
+   embedding it in the DES engine unifies the checking path.
 
 ---
 
@@ -410,6 +517,15 @@ OpEntry[num_ops](16B each). Both sides assert struct sizes match.
 5. PyO3 Bound API is verbose but correct. The ownership model prevents
    use-after-free in Python/Rust interop.
 
+6. Embed the simulator early. The DES sim (planck-sim) was added after the core
+   compiler was complete, but it immediately caught schedule quality issues that
+   unit tests couldn't: non-monotonic timing, suboptimal pipeline depth selection.
+   In v0.2, the sim should be part of the compiler's test harness from day one.
+
+7. Feature-gate heavy dependencies. The sim module requires toml+serde for config
+   parsing. Making it a Cargo feature (`--features sim`) keeps the core crate
+   zero-dependency for production builds while still enabling rich testing.
+
 ---
 
 ## Appendix A: File Inventory
@@ -420,44 +536,61 @@ planck/
   Cargo.lock                     dependency lockfile
   pyproject.toml                 maturin build config
   rust-toolchain.toml            pins stable Rust channel
+  planck-sim.toml                default simulation config
   crates/
     planck-core/
-      Cargo.toml                 zero external deps (criterion dev-dep only)
+      Cargo.toml                 toml+serde optional (sim feature), criterion dev-dep
       src/
-        lib.rs                   6 lines    module re-exports
-        plan.rs                  682 lines  IR types + compile + fuse + simulation
+        lib.rs                     8 lines  module re-exports
+        plan.rs                  703 lines  IR types + compile + fuse + simulation
         topo.rs                  105 lines  8-card HCCS topology
-        cost.rs                  74 lines   alpha-beta-gamma cost model
+        cost.rs                   74 lines  alpha-beta-gamma cost model
         algo.rs                  119 lines  Ring AllReduce decomposition
         sched.rs                 208 lines  pipeline scheduler
         template.rs              123 lines  parameterized templates
+        sim/
+          mod.rs                  86 lines  public API + integration tests
+          engine.rs              274 lines  DES engine (BinaryHeap, per-rank streams)
+          config.rs              164 lines  TOML config parser
+          timing.rs              129 lines  SimpleModel + AscendModel
+          trace.rs                95 lines  Chrome Trace JSON emitter
+          link.rs                 57 lines  link contention (fair-share BW)
       benches/
-        compile_bench.rs         50 lines   criterion benchmarks
+        compile_bench.rs          50 lines  criterion benchmarks (4 cases)
     planck-python/
-      Cargo.toml                 planck-core + pyo3 0.22
+      Cargo.toml                 planck-core[sim] + pyo3 0.22
       src/
-        lib.rs                   248 lines  PyO3 bindings (4 classes)
+        lib.rs                   273 lines  PyO3 bindings (4 classes + simulate)
   python/planck/
-    __init__.py                  18 lines   re-exports
+    __init__.py                   20 lines  re-exports
   tests/
-    test_plan_compile.py         55 lines   4 pytest tests
+    test_plan_compile.py          55 lines  4 pytest tests (compile/cache/template)
+    test_sim.py                   34 lines  3 pytest tests (sim via Python)
   docs/
     plans/
-      2026-03-19-planck-design.md          design document
-      2026-03-19-planck-v01-implementation.md  implementation plan
-    phase-a-summary.md                     THIS FILE
+      2026-03-19-planck-design.md              design document
+      2026-03-19-planck-v01-implementation.md   implementation plan
+      2026-03-20-phase-b-macos-design.md        Phase B macOS design
+      2026-03-20-phase-b-macos-impl.md          Phase B implementation plan
+    phase-a-summary.md                         THIS FILE
 ```
 
 ## Appendix B: How to Verify
 
 ```bash
-# Rust tests (29/29)
+# Rust tests -- core only (29/29)
 cargo test -p planck-core
+
+# Rust tests -- core + sim (44/44)
+cargo test -p planck-core --features sim
 
 # Rust benchmarks
 cargo bench -p planck-core
 
-# Python build + tests (4/4)
+# Python build + all tests (7/7)
 maturin develop
-/Users/shanshan/miniconda3/bin/python -m pytest tests/test_plan_compile.py -v
+python -m pytest tests/ -v
+
+# Simulation with custom config
+cargo test -p planck-core --features sim -- sim_ --nocapture
 ```
