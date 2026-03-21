@@ -240,15 +240,10 @@ nodes:
     max_runs: 1
     deps: [gate_python]
     prompt: |
-      撰写Planck v0.1 Phase A实现总结报告。
+      用一段连贯的话总结本次运行结果，不要用标题或列表。
+      包含: 通过了几个gate、总共写了多少行代码、遇到什么问题、下一步建议。
 
-      各阶段结果:
-      - 骨架: ${nodes.gate_build.status}
-      - IR + 拓扑: ${nodes.gate_ir_topo.status}
-      - 代价模型: ${nodes.gate_cost.status}
-      - 编译器(algo+sched+fusion): ${nodes.gate_compiler.status}
-      - 仿真: ${nodes.gate_simulation.status}
-      - PyO3绑定: ${nodes.gate_python.status}
-
-      包含: 实现内容、测试结果、编译benchmark数据、
-      遇到的问题、Phase B(C++ on Ascend硬件)就绪度评估。
+      各gate状态:
+      build=${nodes.gate_build.status} ir_topo=${nodes.gate_ir_topo.status}
+      cost=${nodes.gate_cost.status} compiler=${nodes.gate_compiler.status}
+      simulation=${nodes.gate_simulation.status} python=${nodes.gate_python.status}
