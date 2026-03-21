@@ -20,3 +20,4 @@ SHARED_TASK_NOTES.md
 planck*.yaml
 .pytest_cache/
 docs/
+tasks/
