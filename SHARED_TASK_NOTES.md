@@ -1,3 +1,25 @@
+# gate_fuse_compile 任务状态
+
+> 目标: 在plan.rs中添加指令融合pass和顶层compile()函数
+> 状态: 已完成 — fuse() + compile() + 4个测试全部在scaffold阶段实现，29个测试全部通过
+
+## 已完成
+
+- [x] `fuse()` (plan.rs:238-326): 三种融合pattern，贪心最长优先
+  - Wait + LocalReduce + Put -> WaitReducePut
+  - Wait + LocalReduce + LocalCopy -> WaitReduceCopy
+  - Put + Signal -> PutWithSignal
+- [x] `compile()` (plan.rs:331-358): topo -> cost -> algo -> sched -> fuse -> ExecutionPlan
+- [x] TDD测试: fusion_put_signal, fusion_wait_reduce_put, fusion_preserves_unfusable, compile_produces_valid_plan
+- [x] E2E验证: simulate_ring_allreduce, simulate_plan_execution
+
+## 发现
+
+这些功能在commit 2825761 (feat(gate_build): scaffold verified) 中已经实现。
+无需新增代码，任务已完成。
+
+---
+
 # Planck Design Deep-Read: Architecture Distillation
 
 > 目标: 精读 docs/plans/2026-03-19-planck-design.md，提炼六大核心概念
@@ -621,3 +643,124 @@ topo.rs在Phase A (Chunk 2, Task 3)中已完整实现。NODE_COMPLETE
 ## 结论
 
 cost.rs在Phase A (Chunk 2, Task 4)中已完整实现。NODE_COMPLETE
+
+---
+
+# impl_algo: Ring AllReduce算法分解
+
+> 状态: NODE已完成 — algo.rs在Phase A (Chunk 3, Task 5)中已完整实现
+
+## 验证清单
+
+| 要求                                        | 代码位置          | 状态 |
+|:-------------------------------------------|:-----------------|:-----|
+| Phase enum (ReduceScatter, AllGather)       | algo.rs:9-13     | done |
+| AlgoStep struct (7字段)                     | algo.rs:15-24    | done |
+| ring_allreduce(num_ranks, my_rank)          | algo.rs:32-70    | done |
+| RS: send=(r-k+n)%n, recv=(r-k-1+n)%n       | algo.rs:47-48    | done |
+| AG: send=(r-k+1+n)%n, recv=(r-k+n)%n       | algo.rs:60-61    | done |
+| dst=(r+1)%n, src=(r-1+n)%n                 | algo.rs:35-36    | done |
+| test: ring_allreduce_step_count (14=2*7)   | algo.rs:79-85    | pass |
+| test: ring_send_recv_ranks                  | algo.rs:88-93    | pass |
+| test: ring_rs_chunk_indices                 | algo.rs:97-105   | pass |
+| test: all_chunks_covered                    | algo.rs:108-118  | pass |
+| cargo test -p planck-core algo              | 4 passed, 0 fail | pass |
+
+## 结论
+
+algo.rs在Phase A (Chunk 3, Task 5)中已完整实现。NODE_COMPLETE
+
+---
+
+# impl_sched: 双缓冲流水线调度器
+
+> 状态: NODE已完成 — sched.rs在Phase A (Chunk 3, Task 6)中已完整实现
+
+## Spec核对
+
+| 要求                                          | 代码位置            | 状态 |
+|:---------------------------------------------|:-------------------|:-----|
+| ScheduleResult {ops, buffers, num_streams}   | sched.rs:13-17     | done |
+| schedule(steps, msg_size, pipeline_chunks)   | sched.rs:31        | done |
+| 每pipeline chunk c -> stream c               | sched.rs:44-45     | done |
+| ring_piece = msg/(chunks*ranks)              | sched.rs:38-39     | done |
+| N input子块 (per chunk)                       | sched.rs:49-56     | done |
+| N output子块 (per chunk)                      | sched.rs:59-66     | done |
+| 2 scratch双缓冲 (per chunk)                   | sched.rs:69-80     | done |
+| 双缓冲选择: step%2 -> scratch_a/b             | sched.rs:84        | done |
+| RS -> Put + Signal + Wait + LocalReduce      | sched.rs:88-113    | done |
+| AG -> Put + Signal + Wait + LocalCopy        | sched.rs:115-142   | done |
+| test: schedule_produces_ops                  | sched.rs:162-167   | pass |
+| test: schedule_uses_c_streams (max=3)        | sched.rs:170-175   | pass |
+| test: schedule_buffer_sizes (>=2*chunks)     | sched.rs:178-195   | pass |
+| test: schedule_op_sequence_per_stream (56)   | sched.rs:198-207   | pass |
+| cargo test -p planck-core sched              | 4 passed, 0 fail   | pass |
+
+## 集成验证
+
+sched在编译流水线中的位置: `compile()` (plan.rs:331-358) 调用 `sched::schedule()` 作为Step 2。
+E2E测试 `simulate_plan_execution` (plan.rs:564-702) 覆盖了完整路径 algo->sched->fuse->execute，8卡AllReduce结果正确(sum=36.0)。
+
+## 结论
+
+sched.rs在Phase A (Chunk 3, Task 6)中已完整实现，4项TDD测试 + E2E集成验证均通过。NODE_COMPLETE
+
+### 2026-03-22 DAG Node再次验证
+
+DAG系统重新触发impl_sched node。验证结果:
+- `cargo test -p planck-core sched`: 4 passed, 0 failed
+- `cargo test -p planck-core`: 29 passed, 0 failed
+- sched::schedule()在plan.rs:341被compile()调用，集成点完好
+- 无代码变更需要，结论不变: NODE_COMPLETE
+
+---
+
+# gate_fuse_compile: 指令融合pass + 顶层compile()
+
+> 状态: NODE已完成 — fuse()和compile()在Phase A (Chunk 3, Task 7)中已完整实现
+
+## fuse() Spec核对
+
+| 融合模式 | 代码位置 | 测试 |
+|:---------|:---------|:-----|
+| Wait+LocalReduce+Put -> WaitReducePut | plan.rs:254-271 | fusion_wait_reduce_put |
+| Wait+LocalReduce+LocalCopy -> WaitReduceCopy | plan.rs:277-295 | E2E simulate_plan_execution |
+| Put+Signal -> PutWithSignal | plan.rs:299-318 | fusion_put_signal |
+| 贪心最长优先(3-op先于2-op) | plan.rs:243 | 结构保证 |
+
+实现细节:
+- 同一stream_id才允许融合 (plan.rs:245-246, 300-301)
+- _pad字段重载: WaitReducePut存put远端dst_buf, WaitReduceCopy存reduce中间dst_buf
+- wait_event在WaitReducePut中存Wait的source rank (plan.rs:266)
+
+## compile() 流水线核对
+
+| 步骤 | 代码位置 | 调用 |
+|:-----|:---------|:-----|
+| Step 0: cost model | plan.rs:335 | cost::CostModel::from_topology(topo) |
+| Step 1: algo | plan.rs:338 | algo::ring_allreduce(num_ranks, my_rank) |
+| Step 2: schedule | plan.rs:341 | sched::schedule(&steps, msg_size, chunks) |
+| Step 3: fuse | plan.rs:344 | fuse(sched_result.ops) |
+| Step 4: assemble | plan.rs:347-357 | ExecutionPlan构造 |
+
+输入: CompileRequest (plan.rs:221-228) + Topology (topo.rs:32-35)
+输出: ExecutionPlan (plan.rs:83-88)
+
+## TDD 4项测试
+
+| 测试 | 代码位置 | 验证内容 |
+|:-----|:---------|:---------|
+| fusion_put_signal | plan.rs:416-424 | 2 ops -> 1 PutWithSignal |
+| fusion_wait_reduce_put | plan.rs:427-436 | 3 ops -> 1 WaitReducePut |
+| fusion_preserves_unfusable | plan.rs:439-446 | Noop+Put保持2 ops不变 |
+| compile_produces_valid_plan | plan.rs:449-469 | magic/ranks正确, ops>0, 融合后ops<224 |
+
+## 验证结果
+
+- `cargo test -p planck-core`: 29 passed, 0 failed
+- 零warning编译
+- E2E测试 simulate_plan_execution (plan.rs:564-702) 覆盖完整compile路径，8卡AllReduce结果正确(sum=36.0)
+
+## 结论
+
+fuse()和compile()在Phase A (Chunk 3, Task 7)中已完整实现，4项TDD测试 + 2项E2E仿真测试均通过。NODE_COMPLETE
